@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:
+    "Inter", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+  --color-canvas: #08090d;
+  --color-ink: #e9ebf3;
+  --color-muted: #8b90a3;
+  --color-brand: #7c6cff;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    background-image:
+      radial-gradient(1200px 620px at 12% -8%, rgba(124, 108, 255, 0.16), transparent 62%),
+      radial-gradient(900px 520px at 102% 0%, rgba(34, 211, 238, 0.09), transparent 58%),
+      radial-gradient(760px 520px at 55% 112%, rgba(236, 72, 153, 0.06), transparent 60%);
+    background-attachment: fixed;
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: rgba(124, 108, 255, 0.35);
+    color: #fff;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  input,
+  textarea,
+  button {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/[0.07] bg-white/[0.03];
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-xl text-[13.5px] font-medium transition-all duration-150 disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  .field {
+    @apply w-full rounded-xl border border-white/[0.08] bg-black/25 px-3.5 text-[14px] text-white outline-none transition placeholder:text-white/25 focus:border-[#7c6cff]/55 focus:bg-black/35 focus:ring-4 focus:ring-[#7c6cff]/10;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal {
+  animation: rise 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+  }
+}

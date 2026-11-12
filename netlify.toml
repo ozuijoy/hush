@@ -1,0 +1,23 @@
+# Hush — Netlify 部署設定
+#
+# 前端：Vite 產出 dist/
+# API：netlify/functions/api.ts（Functions v2，自訂路徑 /api/*）
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# API 先走函式；其他路徑交給 SPA。
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

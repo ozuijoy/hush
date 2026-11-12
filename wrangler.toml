@@ -1,0 +1,13 @@
+# Hush — Cloudflare Pages 設定
+#
+# 靜態檔由 dist/ 提供，/api/* 由 functions/ 目錄的 Pages Functions 處理。
+# 不使用 Cloudflare Workers，也不使用 R2。
+
+name = "hush"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-01-01"
+
+# Cloudflare Pages 後台設定：
+#   Build command : npm run build:pages
+#   Output dir    : dist
+#   Environment   : 設定 DATABASE_URL、ADMIN_PASSWORD 等（見 .env.example）
