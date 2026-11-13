@@ -109,6 +109,98 @@ export async function fetchMessageById(db: Sql, id: string) {
   return rows.length ? toMessage(rows[0]) : null;
 }
 
+export async function fetchPinned(db: Sql) {
+  const rows = await db.query<{ messageId: string; pinnedAt: string; pinnedByName: string | null }>(
+    `select p.message_id::text as "messageId",
+            ${ISO_TIME('p.pinned_at')} as "pinnedAt",
+            u.display_name as "pinnedByName"
+     from chat_pin p
+     left join users u on u.id = p.pinned_by
+     where p.id = 1`,
+  );
+  const pin = rows[0];
+  if (!pin) return null;
+  const message = await fetchMessageById(db, pin.messageId);
+  if (!message || message.deleted) return null;
+  return { message, pinnedAt: pin.pinnedAt, pinnedBy: pin.pinnedByName };
+}
+
+/** 把使用者輸入轉成 ILIKE 樣式，跳脫 % _ \\ 避免被當成萬用字元。 */
+function likePattern(input: string): string {
+  return `%${input.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+}
+
+const SEARCH_LIMIT = 30;
+const CONTEXT_SIZE = 15;
+
+messageRoutes.get('/pinned', async (c) => {
+  return c.json({ pinned: await fetchPinned(c.get('db')) });
+});
+
+/**
+ * 關鍵字搜尋：比對訊息內文與檔名（不分大小寫），排除已刪除訊息。
+ * 可加 author（成員 id）與 files=1（只看檔案）篩選；before 用來翻下一頁。
+ */
+messageRoutes.get('/search', async (c) => {
+  const q = (c.req.query('q') ?? '').trim();
+  if (!q) throw new HttpError(400, 'invalid_field', '請輸入搜尋關鍵字。');
+  if (q.length > 100) throw new HttpError(400, 'invalid_field', '關鍵字不可超過 100 個字元。');
+
+  const author = c.req.query('author') || null;
+  if (author && !/^[0-9a-f-]{36}$/i.test(author)) {
+    throw new HttpError(400, 'invalid_field', '成員編號格式錯誤。');
+  }
+  const filesOnly = c.req.query('files') === '1';
+  const before = optionalCursor(c.req.query('before'), 'before');
+
+  const conditions = [
+    'm.deleted_at is null',
+    `(m.body ilike $1 escape '\\' or (f.deleted_at is null and f.name ilike $1 escape '\\'))`,
+  ];
+  const params: unknown[] = [likePattern(q)];
+  if (author) {
+    params.push(author);
+    conditions.push(`m.author_id = $${params.length}::uuid`);
+  }
+  if (filesOnly) conditions.push(`m.kind = 'file'`);
+  if (before) {
+    params.push(before);
+    conditions.push(`m.id < $${params.length}::bigint`);
+  }
+
+  const rows = await c
+    .get('db')
+    .query<MessageRow>(
+      SELECT_MESSAGES(`where ${conditions.join(' and ')}`, 'desc', String(SEARCH_LIMIT + 1)),
+      params,
+    );
+  const hasMore = rows.length > SEARCH_LIMIT;
+  const results = rows.slice(0, SEARCH_LIMIT).map(toMessage);
+  return c.json({
+    results,
+    hasMore,
+    nextBefore: hasMore ? results[results.length - 1].id : null,
+  });
+});
+
+/** 某則訊息的前後文：用於搜尋結果與置頂訊息的跳轉。 */
+messageRoutes.get('/:id/context', async (c) => {
+  const id = c.req.param('id');
+  if (!/^\d{1,18}$/.test(id)) throw new HttpError(400, 'invalid_id', '訊息編號格式錯誤。');
+  const db = c.get('db');
+  const target = await fetchMessageById(db, id);
+  if (!target) throw new HttpError(404, 'not_found', '找不到這則訊息。');
+
+  const before = await fetchMessages(db, { before: id, limit: CONTEXT_SIZE });
+  const after = await fetchMessages(db, { after: id, limit: CONTEXT_SIZE });
+  return c.json({
+    messages: [...before, target, ...after],
+    targetId: id,
+    hasOlder: before.length === CONTEXT_SIZE,
+    hasNewer: after.length === CONTEXT_SIZE,
+  });
+});
+
 messageRoutes.get('/', async (c) => {
   const after = optionalCursor(c.req.query('after'), 'after');
   const before = optionalCursor(c.req.query('before'), 'before');
@@ -116,6 +208,8 @@ messageRoutes.get('/', async (c) => {
   const messages = await fetchMessages(c.get('db'), { after, before, limit });
   return c.json({
     messages,
+    // 輪詢只拿新訊息，置頂狀態每次一併回傳，其他成員才看得到變化。
+    pinned: await fetchPinned(c.get('db')),
     lastId: messages.length ? messages[messages.length - 1].id : after ?? '0',
     serverTime: new Date().toISOString(),
   });
@@ -138,6 +232,50 @@ messageRoutes.post('/', async (c) => {
   return c.json({ message: toMessage(rows[0]) }, 201);
 });
 
+/** 置頂：同時只有一則，新的會取代舊的。 */
+messageRoutes.put('/:id/pin', async (c) => {
+  const user = c.get('user');
+  requireAdmin(user);
+  const id = c.req.param('id');
+  if (!/^\d{1,18}$/.test(id)) throw new HttpError(400, 'invalid_id', '訊息編號格式錯誤。');
+
+  const db = c.get('db');
+  const target = await fetchMessageById(db, id);
+  if (!target || target.deleted) throw new HttpError(404, 'not_found', '找不到這則訊息。');
+  if (target.kind === 'system') throw new HttpError(400, 'invalid_target', '系統訊息不能置頂。');
+
+  const previous = await db.query<{ messageId: string }>(
+    `select message_id::text as "messageId" from chat_pin where id = 1`,
+  );
+  await db.query(
+    `insert into chat_pin (id, message_id, pinned_by, pinned_at) values (1, $1::bigint, $2, now())
+     on conflict (id) do update set message_id = excluded.message_id,
+       pinned_by = excluded.pinned_by, pinned_at = excluded.pinned_at`,
+    [id, user.id],
+  );
+  await recordAudit(db, { id: user.id, name: user.displayName }, 'message.pin', {
+    type: 'message',
+    id,
+  }, { replaced: previous[0]?.messageId ?? null });
+  return c.json({ pinned: await fetchPinned(db) });
+});
+
+messageRoutes.delete('/pin', async (c) => {
+  const user = c.get('user');
+  requireAdmin(user);
+  const db = c.get('db');
+  const rows = await db.query<{ messageId: string }>(
+    `delete from chat_pin where id = 1 returning message_id::text as "messageId"`,
+  );
+  if (rows.length) {
+    await recordAudit(db, { id: user.id, name: user.displayName }, 'message.unpin', {
+      type: 'message',
+      id: rows[0].messageId,
+    });
+  }
+  return c.json({ pinned: null });
+});
+
 messageRoutes.delete('/:id', async (c) => {
   const user = c.get('user');
   requireAdmin(user);
@@ -152,6 +290,8 @@ messageRoutes.delete('/:id', async (c) => {
     [id, user.id],
   );
   if (!rows.length) throw new HttpError(404, 'not_found', '找不到這則訊息。');
+  // 被刪除的訊息不能繼續置頂。
+  await db.query('delete from chat_pin where message_id = $1::bigint', [id]);
 
   await recordAudit(db, { id: user.id, name: user.displayName }, 'message.delete', {
     type: 'message',

@@ -2,7 +2,9 @@ import type {
   AuditEntry,
   FileItem,
   Message,
+  MessageContext,
   Overview,
+  PinnedMessage,
   SessionPayload,
   User,
 } from './types';
@@ -70,7 +72,7 @@ export const api = {
     }),
 
   messages: (after?: string, limit = 80) =>
-    request<{ messages: Message[]; lastId: string; serverTime: string }>(
+    request<{ messages: Message[]; pinned: PinnedMessage | null; lastId: string; serverTime: string }>(
       `/api/messages?limit=${limit}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
     ),
   messagesBefore: (before: string, limit = 60) =>
@@ -80,6 +82,19 @@ export const api = {
   sendMessage: (text: string) =>
     request<{ message: Message }>('/api/messages', { method: 'POST', body: body({ body: text }) }),
   deleteMessage: (id: string) => request<{ ok: true; id: string }>(`/api/messages/${id}`, { method: 'DELETE' }),
+  pinMessage: (id: string) =>
+    request<{ pinned: PinnedMessage | null }>(`/api/messages/${id}/pin`, { method: 'PUT' }),
+  unpinMessage: () => request<{ pinned: null }>('/api/messages/pin', { method: 'DELETE' }),
+  searchMessages: (query: { q: string; author?: string; filesOnly?: boolean; before?: string }) => {
+    const params = new URLSearchParams({ q: query.q });
+    if (query.author) params.set('author', query.author);
+    if (query.filesOnly) params.set('files', '1');
+    if (query.before) params.set('before', query.before);
+    return request<{ results: Message[]; hasMore: boolean; nextBefore: string | null }>(
+      `/api/messages/search?${params.toString()}`,
+    );
+  },
+  messageContext: (id: string) => request<MessageContext>(`/api/messages/${id}/context`),
 
   files: () =>
     request<{ files: FileItem[]; totalBytes: number; storageDriver: 's3' | 'pg'; maxUploadBytes: number }>(

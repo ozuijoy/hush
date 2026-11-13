@@ -31,6 +31,19 @@ export interface Message {
   pending?: boolean;
 }
 
+export interface PinnedMessage {
+  message: Message;
+  pinnedAt: string;
+  pinnedBy: string | null;
+}
+
+export interface MessageContext {
+  messages: Message[];
+  targetId: string;
+  hasOlder: boolean;
+  hasNewer: boolean;
+}
+
 export interface AppConfig {
   appName: string;
   storageDriver: 's3' | 'pg';

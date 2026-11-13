@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/server/app';
 import { loadConfig } from '../src/server/config';
@@ -53,7 +54,7 @@ async function call(path: string, options: CallOptions = {}): Promise<Response> 
 }
 
 beforeAll(async () => {
-  const pg = new PGlite();
+  const pg = new PGlite({ extensions: { pg_trgm } });
   const sql: Sql = {
     async query<T>(text: string, params: unknown[] = []) {
       const result = await pg.query(text, params);
@@ -177,6 +178,45 @@ describe('Hush API', () => {
     }
   });
 
+  it('置頂：只有管理員能設定，同時只有一則，輪詢會帶回置頂狀態', async () => {
+    const all = await (await call('/api/messages', { cookie: aliceCookie })).json();
+    const [first, second] = all.messages;
+    expect(all.pinned).toBeNull();
+
+    const forbidden = await call(`/api/messages/${first.id}/pin`, { method: 'PUT', cookie: aliceCookie });
+    expect(forbidden.status).toBe(403);
+
+    const pinFirst = await call(`/api/messages/${first.id}/pin`, { method: 'PUT', cookie: adminCookie });
+    expect(pinFirst.status).toBe(200);
+    expect((await pinFirst.json()).pinned.message.id).toBe(first.id);
+
+    // 置頂第二則會取代第一則。
+    const pinSecond = await call(`/api/messages/${second.id}/pin`, { method: 'PUT', cookie: adminCookie });
+    const replaced = await pinSecond.json();
+    expect(replaced.pinned.message.id).toBe(second.id);
+    expect(replaced.pinned.pinnedBy).toBe('管理員');
+
+    // 其他成員輪詢新訊息時也拿得到置頂。
+    const polled = await (
+      await call(`/api/messages?after=${second.id}`, { cookie: aliceCookie })
+    ).json();
+    expect(polled.messages).toHaveLength(0);
+    expect(polled.pinned.message.id).toBe(second.id);
+
+    const missing = await call('/api/messages/999999/pin', { method: 'PUT', cookie: adminCookie });
+    expect(missing.status).toBe(404);
+
+    const unpinForbidden = await call('/api/messages/pin', { method: 'DELETE', cookie: aliceCookie });
+    expect(unpinForbidden.status).toBe(403);
+    const unpin = await call('/api/messages/pin', { method: 'DELETE', cookie: adminCookie });
+    expect(unpin.status).toBe(200);
+    const after = await (await call('/api/messages/pinned', { cookie: aliceCookie })).json();
+    expect(after.pinned).toBeNull();
+
+    // 為下一個測試保留：置頂第二則（它接著會被刪除）。
+    await call(`/api/messages/${second.id}/pin`, { method: 'PUT', cookie: adminCookie });
+  });
+
   it('只有管理員可以刪除訊息，刪除後只留下墓碑', async () => {
     const forbidden = await call(`/api/messages/${messageId}`, {
       method: 'DELETE',
@@ -196,6 +236,69 @@ describe('Hush API', () => {
     expect(target.deleted).toBe(true);
     expect(target.kind).toBe('deleted');
     expect(target.body).toBeNull();
+
+    // 刪除置頂中的訊息會一併取消置頂，也不能再置頂墓碑。
+    const pinned = await (await call('/api/messages/pinned', { cookie: adminCookie })).json();
+    expect(pinned.pinned).toBeNull();
+    const pinDeleted = await call(`/api/messages/${messageId}/pin`, { method: 'PUT', cookie: adminCookie });
+    expect(pinDeleted.status).toBe(404);
+  });
+
+  it('搜尋：中文、英文不分大小寫、檔名、篩選與萬用字元跳脫', async () => {
+    const posts = ['週五 Demo 改到下午三點', '記得帶 demo 用的筆電', '折扣 100% 確定', 'snake_case 命名'];
+    for (const text of posts) {
+      const res = await call('/api/messages', { method: 'POST', cookie: aliceCookie, body: { body: text } });
+      expect(res.status).toBe(201);
+    }
+    const search = async (query: string) => {
+      const res = await call(`/api/messages/search?${query}`, { cookie: aliceCookie });
+      expect(res.status, query).toBe(200);
+      return (await res.json()) as { results: Array<{ id: string; body: string | null; author: { name: string } }>; hasMore: boolean };
+    };
+
+    const zh = await search(`q=${encodeURIComponent('下午')}`);
+    expect(zh.results.map((m) => m.body)).toEqual(['週五 Demo 改到下午三點']);
+
+    const en = await search('q=DEMO');
+    expect(en.results).toHaveLength(2);
+    // 新的在前。
+    expect(en.results[0].body).toContain('筆電');
+
+    // % 與 _ 只當一般字元。
+    expect((await search(`q=${encodeURIComponent('%')}`)).results.map((m) => m.body)).toEqual(['折扣 100% 確定']);
+    expect((await search(`q=${encodeURIComponent('_')}`)).results.map((m) => m.body)).toEqual(['snake_case 命名']);
+
+    // 已刪除的訊息搜不到。
+    expect((await search(`q=${encodeURIComponent('收到')}`)).results).toHaveLength(0);
+
+    const members = await (await call('/api/members', { cookie: adminCookie })).json();
+    const admin = members.members.find((m: { role: string }) => m.role === 'admin');
+    const byAdmin = await search(`q=${encodeURIComponent('第一則')}&author=${admin.id}`);
+    expect(byAdmin.results).toHaveLength(1);
+    const byOther = await search(`q=demo&author=${admin.id}`);
+    expect(byOther.results).toHaveLength(0);
+
+    const empty = await call('/api/messages/search?q=', { cookie: aliceCookie });
+    expect(empty.status).toBe(400);
+    const badAuthor = await call('/api/messages/search?q=a&author=x', { cookie: aliceCookie });
+    expect(badAuthor.status).toBe(400);
+  });
+
+  it('訊息前後文：用於跳轉到搜尋結果', async () => {
+    const found = await (
+      await call(`/api/messages/search?q=${encodeURIComponent('筆電')}`, { cookie: aliceCookie })
+    ).json();
+    const id = found.results[0].id;
+    const res = await call(`/api/messages/${id}/context`, { cookie: aliceCookie });
+    expect(res.status).toBe(200);
+    const context = await res.json();
+    expect(context.targetId).toBe(id);
+    const ids = context.messages.map((m: { id: string }) => Number(m.id));
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    expect(ids).toContain(Number(id));
+    expect(context.messages.some((m: { body: string | null }) => m.body?.includes('下午'))).toBe(true);
+
+    expect((await call('/api/messages/999999/context', { cookie: aliceCookie })).status).toBe(404);
   });
 
   it('檔案：預簽名 → 上傳 → 完成 → 下載', async () => {
@@ -230,6 +333,12 @@ describe('Hush API', () => {
     const files = await list.json();
     expect(files.files).toHaveLength(1);
     expect(files.totalBytes).toBe(fileBytes.byteLength);
+
+    const byName = await (
+      await call(`/api/messages/search?files=1&q=${encodeURIComponent('會議紀錄')}`, { cookie: aliceCookie })
+    ).json();
+    expect(byName.results).toHaveLength(1);
+    expect(byName.results[0].file.name).toBe('會議紀錄.txt');
 
     const url = await call(`/api/files/${fileId}/url`, { cookie: aliceCookie });
     const target = await url.json();
@@ -304,6 +413,8 @@ describe('Hush API', () => {
     const actions = entries.entries.map((entry: { action: string }) => entry.action);
     expect(actions).toContain('file.delete');
     expect(actions).toContain('message.delete');
+    expect(actions).toContain('message.pin');
+    expect(actions).toContain('message.unpin');
 
     const badLimit = await call('/api/admin/audit?limit=abc', { cookie: adminCookie });
     expect(badLimit.status).toBe(200);

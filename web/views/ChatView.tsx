@@ -8,22 +8,32 @@ import {
   DownloadIcon,
   LockIcon,
   PaperclipIcon,
+  PinIcon,
+  SearchIcon,
   SendIcon,
   TrashIcon,
+  XIcon,
 } from '../components/Icons';
+import { SearchPanel } from './SearchPanel';
 import { Avatar, Badge, Button, EmptyState, FileGlyph, Modal, Spinner, cx, IconButton } from '../components/ui';
 import { useToast } from '../components/Toast';
 
 export function ChatView({
   user,
-  memberCount,
+  members,
   onUploaded,
 }: {
   user: User;
-  memberCount: number;
+  members: User[];
   onUploaded: () => void;
 }) {
-  const { messages, loading, error, hasMore, loadOlder, send, remove, refresh } = useChat();
+  const memberCount = members.length;
+  const { messages, pinned, pin, unpin, loading, error, hasMore, loadOlder, send, remove, refresh } =
+    useChat();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [contextId, setContextId] = useState<string | null>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const [pinning, setPinning] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(0);
@@ -110,6 +120,51 @@ export function ChatView({
     }
   };
 
+  /** 訊息已在畫面中就捲過去並閃一下；否則回傳 false，交給搜尋面板顯示前後文。 */
+  const scrollToMessage = (id: string): boolean => {
+    const element = document.getElementById(`msg-${id}`);
+    if (!element) return false;
+    stick.current = false;
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setHighlighted(id);
+    window.setTimeout(() => setHighlighted((current) => (current === id ? null : current)), 2200);
+    return true;
+  };
+
+  const openPinned = () => {
+    if (!pinned) return;
+    if (scrollToMessage(pinned.message.id)) return;
+    setContextId(pinned.message.id);
+    setSearchOpen(true);
+  };
+
+  const togglePin = async (message: Message) => {
+    if (pinning) return;
+    setPinning(true);
+    try {
+      if (pinned?.message.id === message.id) {
+        await unpin();
+        toast('已取消置頂。', 'success');
+      } else {
+        await pin(message.id);
+        toast(pinned ? '已置頂，並取代原本的置頂訊息。' : '已置頂。', 'success');
+      }
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : '置頂失敗。', 'error');
+    } finally {
+      setPinning(false);
+    }
+  };
+
+  const removePin = async () => {
+    try {
+      await unpin();
+      toast('已取消置頂。', 'success');
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : '取消置頂失敗。', 'error');
+    }
+  };
+
   const confirmDelete = async () => {
     if (!confirm) return;
     setDeleting(true);
@@ -136,11 +191,48 @@ export function ChatView({
             <p className="truncate text-[11px] text-white/35">{memberCount} 位成員 · 只有成員看得到</p>
           </div>
         </div>
-        <Badge tone="success">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          自動更新
-        </Badge>
+        <div className="flex items-center gap-2">
+          <IconButton
+            label="搜尋訊息"
+            onClick={() => {
+              setContextId(null);
+              setSearchOpen(true);
+            }}
+          >
+            <SearchIcon size={17} />
+          </IconButton>
+          <Badge tone="success">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            自動更新
+          </Badge>
+        </div>
       </header>
+
+      {pinned ? (
+        <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[#7c6cff]/[0.06] px-4 py-2 lg:px-8">
+          <button
+            type="button"
+            onClick={openPinned}
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            title="跳到置頂訊息"
+          >
+            <PinIcon size={15} className="shrink-0 text-[#a99bff]" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] text-[#a99bff]/80">
+                置頂訊息 · {pinned.message.author?.name ?? '已移除的成員'}
+              </span>
+              <span className="block truncate text-[13px] text-white/80">
+                {pinned.message.body || (pinned.message.file ? `📎 ${pinned.message.file.name}` : '')}
+              </span>
+            </span>
+          </button>
+          {user.role === 'admin' ? (
+            <IconButton label="取消置頂" onClick={() => void removePin()} className="h-7 w-7 shrink-0">
+              <XIcon size={14} />
+            </IconButton>
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         ref={scrollRef}
@@ -219,7 +311,14 @@ export function ChatView({
                     </span>
                   </div>
                 ) : (
-                  <div className={cx('group flex gap-2.5', own ? 'flex-row-reverse' : 'mt-1')}>
+                  <div
+                    id={`msg-${message.id}`}
+                    className={cx(
+                      'group flex gap-2.5 rounded-2xl transition-colors duration-700',
+                      own ? 'flex-row-reverse' : 'mt-1',
+                      highlighted === message.id && 'bg-[#7c6cff]/15',
+                    )}
+                  >
                     {!own ? (
                       <div className="w-8 shrink-0">
                         {!grouped ? (
@@ -299,6 +398,28 @@ export function ChatView({
                           </div>
                         )}
 
+                        {user.role === 'admin' && message.kind !== 'deleted' && !message.pending ? (
+                          <button
+                            type="button"
+                            onClick={() => void togglePin(message)}
+                            className={cx(
+                              'transition group-hover:opacity-100 focus-visible:opacity-100',
+                              pinned?.message.id === message.id ? 'opacity-100' : 'opacity-0',
+                            )}
+                            aria-label={pinned?.message.id === message.id ? '取消置頂' : '置頂訊息'}
+                            title={pinned?.message.id === message.id ? '取消置頂' : '置頂訊息'}
+                          >
+                            <PinIcon
+                              size={14}
+                              className={
+                                pinned?.message.id === message.id
+                                  ? 'text-[#a99bff]'
+                                  : 'text-white/30 hover:text-[#a99bff]'
+                              }
+                            />
+                          </button>
+                        ) : null}
+
                         {user.role === 'admin' && message.kind !== 'deleted' ? (
                           <button
                             type="button"
@@ -376,6 +497,17 @@ export function ChatView({
           </div>
         </div>
       </div>
+
+      <SearchPanel
+        open={searchOpen}
+        members={members}
+        contextId={contextId}
+        onClose={() => {
+          setSearchOpen(false);
+          setContextId(null);
+        }}
+        onSelect={scrollToMessage}
+      />
 
       <Modal
         open={Boolean(confirm)}

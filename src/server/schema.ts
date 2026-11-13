@@ -5,7 +5,7 @@
  * 遷移腳本與自動遷移都共用這份唯一真源。
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_STATEMENTS: string[] = [
   `create table if not exists schema_migrations (
@@ -97,6 +97,26 @@ export const SCHEMA_STATEMENTS: string[] = [
    )`,
 
   `create index if not exists audit_created_idx on audit_log (created_at desc)`,
+
+  // v2：置頂。單列資料表（id 固定為 1），由資料庫保證同時只有一則置頂。
+  `create table if not exists chat_pin (
+     id smallint primary key default 1,
+     message_id bigint not null references messages(id) on delete cascade,
+     pinned_by uuid references users(id) on delete set null,
+     pinned_at timestamptz not null default now(),
+     constraint chat_pin_single check (id = 1)
+   )`,
+];
+
+/**
+ * 可選語句：失敗不會中斷遷移。
+ * pg_trgm 讓中文與英文的關鍵字搜尋（ILIKE '%…%'）能走索引；
+ * 若資料庫不允許建立擴充，搜尋仍可用，只是改成循序掃描。
+ */
+export const OPTIONAL_SCHEMA_STATEMENTS: string[] = [
+  `create extension if not exists pg_trgm`,
+  `create index if not exists messages_body_trgm_idx on messages using gin (body gin_trgm_ops)`,
+  `create index if not exists files_name_trgm_idx on files using gin (name gin_trgm_ops)`,
 ];
 
 /** 所有查詢共用的時間格式：固定輸出 ISO-8601 UTC，跨驅動結果一致。 */

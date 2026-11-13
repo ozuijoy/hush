@@ -87,6 +87,20 @@ export const TrashIcon = (props: IconProps) => (
   </Svg>
 );
 
+export const PinIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M9 3.5h6l-1 5.2 3.5 3.3v1.5h-11V12L10 8.7Z" />
+    <path d="M12 13.5V20.5" />
+  </Svg>
+);
+
+export const SearchIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m20 20-4.2-4.2" />
+  </Svg>
+);
+
 export const PlusIcon = (props: IconProps) => (
   <Svg {...props}>
     <path d="M12 5v14M5 12h14" />

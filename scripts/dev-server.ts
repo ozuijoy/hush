@@ -7,6 +7,7 @@
 import { mkdirSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { PGlite } from '@electric-sql/pglite';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { createApp } from '../src/server/app';
 import { loadConfig } from '../src/server/config';
 import { ensureSchema } from '../src/server/db';
@@ -16,7 +17,7 @@ const PORT = Number(process.env.PORT || 8787);
 
 const dataDir = process.env.PGLITE_DATA || '.data/pglite';
 mkdirSync(dataDir, { recursive: true });
-const pg = new PGlite(dataDir);
+const pg = new PGlite(dataDir, { extensions: { pg_trgm } });
 const sql: Sql = {
   async query<T>(text: string, params: unknown[] = []) {
     const result = await pg.query(text, params);

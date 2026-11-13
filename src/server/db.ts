@@ -7,7 +7,7 @@
  */
 import { neon } from '@neondatabase/serverless';
 import type { Sql } from './types';
-import { SCHEMA_STATEMENTS, SCHEMA_VERSION } from './schema';
+import { OPTIONAL_SCHEMA_STATEMENTS, SCHEMA_STATEMENTS, SCHEMA_VERSION } from './schema';
 
 const clients = new Map<string, Sql>();
 
@@ -51,6 +51,13 @@ async function runMigrations(sql: Sql): Promise<void> {
 
   for (const statement of SCHEMA_STATEMENTS) {
     await sql.query(statement);
+  }
+  for (const statement of OPTIONAL_SCHEMA_STATEMENTS) {
+    try {
+      await sql.query(statement);
+    } catch (error) {
+      console.warn('[hush] optional schema statement skipped:', (error as Error).message);
+    }
   }
   await sql.query(
     'insert into schema_migrations (version) values ($1) on conflict (version) do nothing',

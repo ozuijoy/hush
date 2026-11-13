@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
-import type { Message } from './types';
+import type { Message, PinnedMessage } from './types';
 
 const POLL_INTERVAL = 2500;
 
@@ -16,6 +16,7 @@ export function useChat() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [pinned, setPinned] = useState<PinnedMessage | null>(null);
   const cursor = useRef('0');
   const inFlight = useRef(false);
 
@@ -37,6 +38,7 @@ export function useChat() {
     try {
       const response = await api.messages(cursor.current === '0' ? undefined : cursor.current);
       if (response.messages.length) merge(response.messages);
+      setPinned(response.pinned ?? null);
       if (cursor.current === '0') setHasMore(response.messages.length >= 80);
       cursor.current = response.lastId;
       setError(null);
@@ -97,7 +99,8 @@ export function useChat() {
         map.set(response.message.id, response.message);
         return sortMessages([...map.values()]);
       });
-      cursor.current = response.message.id;
+      // 不要把游標直接跳到自己這則：期間別人送出的訊息 id 比較小，會被輪詢略過。
+      // 下次輪詢會把自己這則再拿一次，merge 會去重。
     } catch (caught) {
       setMessages((previous) => previous.filter((message) => message.id !== tempId));
       throw caught;
@@ -113,10 +116,24 @@ export function useChat() {
           : message,
       ),
     );
+    setPinned((current) => (current?.message.id === id ? null : current));
+  }, []);
+
+  const pin = useCallback(async (id: string) => {
+    const response = await api.pinMessage(id);
+    setPinned(response.pinned);
+  }, []);
+
+  const unpin = useCallback(async () => {
+    await api.unpinMessage();
+    setPinned(null);
   }, []);
 
   return {
     messages,
+    pinned,
+    pin,
+    unpin,
     loading,
     error,
     hasMore,
