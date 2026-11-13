@@ -8,6 +8,12 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# .env.example 與 README 只放範例值；它們不會被部署，
+# 但 Netlify 的 secrets scanning 會把「與環境變數相同的字串」當成外洩而讓建置失敗
+# （例如 bucket 名稱、region 恰好與範例相同）。只略過這兩個說明檔，其餘檔案與建置輸出照常掃描。
+[build.environment]
+  SECRETS_SCAN_OMIT_PATHS = ".env.example,README.md"
+
 [functions]
   node_bundler = "esbuild"
 
