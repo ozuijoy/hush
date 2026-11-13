@@ -114,7 +114,7 @@ Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專�
 
 - 密碼：PBKDF2-SHA256、10 萬次迭代、每帳號獨立鹽值；雜湊只存資料庫。
 - Session：httpOnly + SameSite=Lax cookie，伺服器端只存 token 的 SHA-256；改密碼/重設/停用會註銷該使用者所有 session。
-- 登入節流：同帳號 15 分鐘內連錯 5 次鎖 15 分鐘（存 DB，邊緣環境也能用）。
+- 登入節流（存 DB，邊緣環境也能用）：同一 IP 對同一帳號 15 分鐘內連錯 5 次，鎖該帳號在該 IP 15 分鐘；同一 IP 不論帳號累計錯 20 次，整個 IP 鎖 15 分鐘。IP 取自 Cloudflare `cf-connecting-ip` 或 Netlify `x-nf-client-connection-ip`，不信任可偽造的 `x-forwarded-for`。
 - CSRF：所有寫入請求比對 Origin 與 Host。
 - 檔案：bucket 私有，下載一律走「需登入的 API 換發 5 分鐘預簽名 URL」；移除檔案時同步刪除物件。
 - XSS：React 預設跳脫；檔案下載一律 `Content-Disposition: attachment`＋`nosniff`。
@@ -138,7 +138,7 @@ npm run check   # typecheck + 全部測試 + production build
 - `tests/sigv4.test.ts`：對上 AWS 官方文件的簽章範例，並檢查查詢參數排序。
 - `tests/password.test.ts`：PBKDF2 雜湊/驗證/錯誤格式。
 - `tests/config.test.ts`：環境變數解析（儲存模式、上傳上限、SESSION_DAYS 預設值）。
-- `tests/api.test.ts`：以 PGlite 跑 19 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、訊息刪除墓碑、檔案上傳下載與大小檢查、CSRF、登入鎖定（含真實帳號）、停用成員、修改密碼、登出。
+- `tests/api.test.ts`：以 PGlite 跑 21 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、訊息刪除墓碑、檔案上傳下載與大小檢查、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
 
 ## 結構
 

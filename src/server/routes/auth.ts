@@ -7,11 +7,13 @@ import { ensureAdmin } from '../bootstrap';
 import { publicConfig } from '../config';
 import type { AppBindings } from '../context';
 import {
+  LOGIN_LIMITS,
   assertLoginAllowed,
   clearSessionCookie,
   createSession,
   destroySession,
   destroyUserSessions,
+  loginThrottleKeys,
   noteLoginFailure,
   readSessionCookie,
   requireAuth,
@@ -20,7 +22,7 @@ import {
   writeSessionCookie,
 } from '../auth';
 import { hashPassword, verifyPassword } from '../crypto';
-import { HttpError, readJson, requirePassword, requireString } from '../http';
+import { HttpError, clientIp, readJson, requirePassword, requireString } from '../http';
 import { ISO_TIME } from '../schema';
 import type { SessionUser } from '../types';
 
@@ -67,8 +69,8 @@ authRoutes.post('/login', async (c) => {
   const config = c.get('config');
   await ensureAdmin(db, config);
 
-  const throttleKey = `user:${username}`;
-  await assertLoginAllowed(db, throttleKey);
+  const throttle = loginThrottleKeys(username, clientIp(c));
+  await assertLoginAllowed(db, [throttle.accountIp, throttle.ip]);
 
   const rows = await db.query<{ id: string; passwordHash: string; status: string }>(
     `select id, password_hash as "passwordHash", status from users where lower(username) = $1`,
@@ -81,11 +83,12 @@ authRoutes.post('/login', async (c) => {
   const passwordOk = await verifyPassword(password, stored);
 
   if (!row || row.status !== 'active' || !passwordOk) {
-    await noteLoginFailure(db, throttleKey);
+    await noteLoginFailure(db, throttle.accountIp, LOGIN_LIMITS.perAccountIp);
+    await noteLoginFailure(db, throttle.ip, LOGIN_LIMITS.perIp);
     throw new HttpError(401, 'invalid_credentials', '帳號或密碼不正確。');
   }
 
-  await resetLoginFailures(db, throttleKey);
+  await resetLoginFailures(db, throttle.accountIp);
   const { token } = await createSession(
     db,
     row.id,

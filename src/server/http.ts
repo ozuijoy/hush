@@ -106,9 +106,15 @@ export function optionalCursor(raw: string | undefined, field: string): string |
   return raw;
 }
 
+/**
+ * 取得用戶端 IP。優先使用平台寫入、用戶端無法偽造的標頭：
+ * Cloudflare 的 cf-connecting-ip、Netlify 的 x-nf-client-connection-ip；
+ * x-forwarded-for 只當本機開發的後備。
+ */
 export function clientIp(c: Context): string {
-  const forwarded = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '';
-  return forwarded.split(',')[0].trim() || 'local';
+  const trusted = c.req.header('cf-connecting-ip') || c.req.header('x-nf-client-connection-ip');
+  const forwarded = trusted || c.req.header('x-forwarded-for') || '';
+  return forwarded.split(',')[0].trim().slice(0, 64) || 'local';
 }
 /** RFC 5987 檔名，避免中文檔名在 Content-Disposition 壞掉。 */
 export function contentDisposition(name: string): string {

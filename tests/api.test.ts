@@ -29,6 +29,7 @@ type CallOptions = {
   body?: unknown;
   cookie?: string;
   origin?: string;
+  ip?: string;
 };
 
 function cookieFrom(response: Response): string {
@@ -42,6 +43,7 @@ async function call(path: string, options: CallOptions = {}): Promise<Response> 
   if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (options.cookie) headers.cookie = options.cookie;
   if (options.origin) headers.origin = options.origin;
+  if (options.ip) headers['cf-connecting-ip'] = options.ip;
 
   return app.request(path, {
     method: options.method ?? 'GET',
@@ -346,7 +348,7 @@ describe('Hush API', () => {
     expect(locked.status).toBe(429);
   });
 
-  it('真實帳號被鎖定期間，正確密碼也無法登入', async () => {
+  it('真實帳號被鎖定期間，同一 IP 用正確密碼也無法登入', async () => {
     const created = await call('/api/members', {
       method: 'POST',
       cookie: adminCookie,
@@ -364,6 +366,65 @@ describe('Hush API', () => {
     const locked = await call('/api/auth/login', {
       method: 'POST',
       body: { username: 'carol', password: 'carol-pass-123' },
+    });
+    expect(locked.status).toBe(429);
+
+    // 換一個 IP 不受影響：別人在別處亂試，鎖不到本人。
+    const elsewhere = await call('/api/auth/login', {
+      method: 'POST',
+      ip: '203.0.113.7',
+      body: { username: 'carol', password: 'carol-pass-123' },
+    });
+    expect(elsewhere.status).toBe(200);
+  });
+
+  it('同一個 IP 換帳號亂試，累計 20 次後整個 IP 被鎖', async () => {
+    const attacker = '198.51.100.9';
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const res = await call('/api/auth/login', {
+        method: 'POST',
+        ip: attacker,
+        body: { username: `guess${attempt}`, password: 'bad-password' },
+      });
+      expect(res.status).toBe(401);
+    }
+    const blocked = await call('/api/auth/login', {
+      method: 'POST',
+      ip: attacker,
+      body: { username: 'admin', password: 'admin-pass-123' },
+    });
+    expect(blocked.status).toBe(429);
+
+    const other = await call('/api/auth/login', {
+      method: 'POST',
+      ip: '198.51.100.10',
+      body: { username: 'admin', password: 'admin-pass-123' },
+    });
+    expect(other.status).toBe(200);
+  });
+
+  it('偽造 x-forwarded-for 繞不過平台提供的 IP', async () => {
+    const realIp = '192.0.2.50';
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const res = await app.request('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-nf-client-connection-ip': realIp,
+          'x-forwarded-for': `10.0.0.${attempt}`,
+        },
+        body: JSON.stringify({ username: 'carol', password: 'wrong-password' }),
+      });
+      expect(res.status).toBe(401);
+    }
+    const locked = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-nf-client-connection-ip': realIp,
+        'x-forwarded-for': '10.0.0.99',
+      },
+      body: JSON.stringify({ username: 'carol', password: 'carol-pass-123' }),
     });
     expect(locked.status).toBe(429);
   });
