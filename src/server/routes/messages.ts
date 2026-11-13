@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { recordAudit } from '../audit';
 import { requireAdmin, requireAuth } from '../auth';
 import type { AppBindings } from '../context';
-import { HttpError, readJson, requireString } from '../http';
+import { HttpError, optionalCursor, parseLimit, readJson, requireString } from '../http';
 import { ISO_TIME } from '../schema';
 import { MAX_BODY_CHARS } from '../config';
 import type { Sql } from '../types';
@@ -79,7 +79,8 @@ export async function fetchMessages(
   db: Sql,
   options: { after?: string; before?: string; limit?: number },
 ): Promise<ReturnType<typeof toMessage>[]> {
-  const limit = Math.min(Math.max(options.limit ?? 60, 1), 200);
+  const requested = Number(options.limit);
+  const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.trunc(requested), 1), 200) : 60;
   const after = options.after;
   const before = options.before;
 
@@ -109,9 +110,9 @@ export async function fetchMessageById(db: Sql, id: string) {
 }
 
 messageRoutes.get('/', async (c) => {
-  const after = c.req.query('after') || undefined;
-  const before = c.req.query('before') || undefined;
-  const limit = Number(c.req.query('limit') || 60);
+  const after = optionalCursor(c.req.query('after'), 'after');
+  const before = optionalCursor(c.req.query('before'), 'before');
+  const limit = parseLimit(c.req.query('limit'), 60, 200);
   const messages = await fetchMessages(c.get('db'), { after, before, limit });
   return c.json({
     messages,

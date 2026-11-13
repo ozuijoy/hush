@@ -144,10 +144,35 @@ describe('Hush API', () => {
     messageId = payload.message.id;
 
     const list = await call('/api/messages', { cookie: aliceCookie });
+    expect(list.status).toBe(200);
     const { messages } = await list.json();
     expect(messages).toHaveLength(2);
     expect(messages[0].body).toContain('第一則');
     expect(messages[1].author.name).toBe('小艾');
+  });
+
+  it('訊息分頁游標，以及錯誤的查詢參數回 400 而不是 500', async () => {
+    const all = await (await call('/api/messages', { cookie: aliceCookie })).json();
+    const [first, second] = all.messages;
+
+    const after = await (await call(`/api/messages?after=${first.id}`, { cookie: aliceCookie })).json();
+    expect(after.messages.map((m: { id: string }) => m.id)).toEqual([second.id]);
+
+    const before = await (await call(`/api/messages?before=${second.id}`, { cookie: aliceCookie })).json();
+    expect(before.messages.map((m: { id: string }) => m.id)).toEqual([first.id]);
+
+    const limited = await (await call('/api/messages?limit=1', { cookie: aliceCookie })).json();
+    expect(limited.messages.map((m: { id: string }) => m.id)).toEqual([second.id]);
+
+    const badLimit = await call('/api/messages?limit=abc', { cookie: aliceCookie });
+    expect(badLimit.status).toBe(200);
+    expect((await badLimit.json()).messages).toHaveLength(2);
+
+    for (const query of ['after=abc', 'before=1x', 'after=-1']) {
+      const res = await call(`/api/messages?${query}`, { cookie: aliceCookie });
+      expect(res.status, query).toBe(400);
+      expect((await res.json()).error.code).toBe('invalid_cursor');
+    }
   });
 
   it('只有管理員可以刪除訊息，刪除後只留下墓碑', async () => {
@@ -215,6 +240,35 @@ describe('Hush API', () => {
     expect(Array.from(received)).toEqual(Array.from(fileBytes));
   });
 
+  it('上傳大小不一致或超過上限會被拒絕，未完成的檔案不能下載', async () => {
+    const presign = await call('/api/files/presign', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: { name: 'a.bin', size: 10, mime: 'application/octet-stream' },
+    });
+    expect(presign.status).toBe(201);
+    const { fileId: pendingId } = await presign.json();
+
+    const mismatch = await app.request(`/api/files/${pendingId}/content`, {
+      method: 'PUT',
+      headers: { cookie: aliceCookie, 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(3),
+    });
+    expect(mismatch.status).toBe(400);
+    expect((await mismatch.json()).error.code).toBe('size_mismatch');
+
+    const tooLarge = await call('/api/files/presign', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: { name: 'big.bin', size: config.maxUploadBytes + 1 },
+    });
+    expect(tooLarge.status).toBe(413);
+
+    // 未完成的檔案不會出現在列表，也不能下載。
+    const download = await call(`/api/files/${pendingId}/content`, { cookie: aliceCookie });
+    expect(download.status).toBe(404);
+  });
+
   it('只有管理員可以移除檔案', async () => {
     const forbidden = await call(`/api/files/${fileId}`, {
       method: 'DELETE',
@@ -248,6 +302,12 @@ describe('Hush API', () => {
     const actions = entries.entries.map((entry: { action: string }) => entry.action);
     expect(actions).toContain('file.delete');
     expect(actions).toContain('message.delete');
+
+    const badLimit = await call('/api/admin/audit?limit=abc', { cookie: adminCookie });
+    expect(badLimit.status).toBe(200);
+
+    const forbidden = await call('/api/admin/overview', { cookie: aliceCookie });
+    expect(forbidden.status).toBe(403);
   });
 
   it('跨站 Origin 的寫入請求會被拒絕', async () => {
@@ -258,6 +318,17 @@ describe('Hush API', () => {
       body: { body: 'csrf attempt' },
     });
     expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('bad_origin');
+  });
+
+  it('同源 Origin 的寫入請求可以通過', async () => {
+    const res = await call('/api/messages', {
+      method: 'POST',
+      cookie: adminCookie,
+      origin: 'http://localhost',
+      body: { body: 'same origin' },
+    });
+    expect(res.status).toBe(201);
   });
 
   it('連續失敗會被鎖定', async () => {
@@ -273,6 +344,85 @@ describe('Hush API', () => {
       body: { username: 'nobody', password: 'bad-password' },
     });
     expect(locked.status).toBe(429);
+  });
+
+  it('真實帳號被鎖定期間，正確密碼也無法登入', async () => {
+    const created = await call('/api/members', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: 'carol', displayName: '小卡', password: 'carol-pass-123' },
+    });
+    expect(created.status).toBe(201);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const res = await call('/api/auth/login', {
+        method: 'POST',
+        body: { username: 'carol', password: 'wrong-password' },
+      });
+      expect(res.status).toBe(401);
+    }
+    const locked = await call('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'carol', password: 'carol-pass-123' },
+    });
+    expect(locked.status).toBe(429);
+  });
+
+  it('停用成員後，其 session 立即失效', async () => {
+    const created = await call('/api/members', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: 'dave', displayName: '小戴', password: 'dave-pass-123' },
+    });
+    const { member } = await created.json();
+    const login = await call('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'dave', password: 'dave-pass-123' },
+    });
+    const daveCookie = cookieFrom(login);
+
+    const disable = await call(`/api/members/${member.id}`, {
+      method: 'PATCH',
+      cookie: adminCookie,
+      body: { status: 'disabled' },
+    });
+    expect(disable.status).toBe(200);
+
+    const me = await (await call('/api/auth/me', { cookie: daveCookie })).json();
+    expect(me.user).toBeNull();
+    const relogin = await call('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'dave', password: 'dave-pass-123' },
+    });
+    expect(relogin.status).toBe(401);
+  });
+
+  it('修改密碼後舊 session 失效、新密碼可登入', async () => {
+    const wrong = await call('/api/auth/password', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: { currentPassword: 'nope-nope', nextPassword: 'alice-new-pass-1' },
+    });
+    expect(wrong.status).toBe(400);
+
+    const changed = await call('/api/auth/password', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: { currentPassword: 'alice-pass-123', nextPassword: 'alice-new-pass-1' },
+    });
+    expect(changed.status).toBe(200);
+    const newCookie = cookieFrom(changed);
+    expect(newCookie).not.toBe(aliceCookie);
+
+    const oldSession = await (await call('/api/auth/me', { cookie: aliceCookie })).json();
+    expect(oldSession.user).toBeNull();
+
+    const login = await call('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'alice', password: 'alice-new-pass-1' },
+    });
+    expect(login.status).toBe(200);
+    aliceCookie = cookieFrom(login);
   });
 
   it('登出後 session 立即失效', async () => {

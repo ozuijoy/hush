@@ -96,9 +96,13 @@ export async function presign(input: PresignInput): Promise<PresignResult> {
     ...Object.entries(input.extraQuery ?? {}),
   ];
 
+  // SigV4 規定先依「編碼後的參數名」排序、同名再依值排序；
+  // 直接對 `key=value` 字串排序，在某個鍵是另一個鍵的前綴時（如 `a` 與 `a-b`）會排錯。
+  const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
   const canonicalQuery = query
-    .map(([key, value]) => `${rfc3986(key)}=${rfc3986(value)}`)
-    .sort()
+    .map(([key, value]) => [rfc3986(key), rfc3986(value)] as const)
+    .sort(([ka, va], [kb, vb]) => byCodePoint(ka, kb) || byCodePoint(va, vb))
+    .map(([key, value]) => `${key}=${value}`)
     .join('&');
 
   const canonicalRequest = [

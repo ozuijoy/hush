@@ -90,6 +90,22 @@ export function safeFileName(input: string): string {
   return limited || '未命名檔案';
 }
 
+/** 解析分頁筆數：非數字或越界時回到預設值／夾在範圍內，避免把 NaN 帶進 SQL。 */
+export function parseLimit(raw: string | undefined, fallback: number, max: number): number {
+  const value = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(value, 1), max);
+}
+
+/** 訊息游標（bigint id）：只接受純數字，否則回 400，而不是讓 SQL 轉型失敗變成 500。 */
+export function optionalCursor(raw: string | undefined, field: string): string | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  if (!/^\d{1,18}$/.test(raw)) {
+    throw new HttpError(400, 'invalid_cursor', `參數 ${field} 格式錯誤。`);
+  }
+  return raw;
+}
+
 export function clientIp(c: Context): string {
   const forwarded = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '';
   return forwarded.split(',')[0].trim() || 'local';

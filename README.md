@@ -135,9 +135,10 @@ Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專�
 npm run check   # typecheck + 全部測試 + production build
 ```
 
-- `tests/sigv4.test.ts`：對上 AWS 官方文件的簽章範例。
+- `tests/sigv4.test.ts`：對上 AWS 官方文件的簽章範例，並檢查查詢參數排序。
 - `tests/password.test.ts`：PBKDF2 雜湊/驗證/錯誤格式。
-- `tests/api.test.ts`：以 PGlite 跑 13 項端到端情境——登入建立管理員、成員權限、訊息刪除墓碑、檔案上傳下載、CSRF、登入鎖定、登出。
+- `tests/config.test.ts`：環境變數解析（儲存模式、上傳上限、SESSION_DAYS 預設值）。
+- `tests/api.test.ts`：以 PGlite 跑 19 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、訊息刪除墓碑、檔案上傳下載與大小檢查、CSRF、登入鎖定（含真實帳號）、停用成員、修改密碼、登出。
 
 ## 結構
 

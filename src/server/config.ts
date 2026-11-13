@@ -40,6 +40,12 @@ export const MAX_BODY_CHARS = 4000;
 
 const MB = 1024 * 1024;
 
+/** 非數字、0 或負數時回到預設值，避免 NaN 讓 session 到期時間變成 Invalid Date。 */
+function positiveNumber(raw: string | undefined, fallback: number): number {
+  const value = Number(raw);
+  return raw && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const bucket = env.S3_BUCKET?.trim();
   const accessKeyId = env.S3_ACCESS_KEY_ID?.trim();
@@ -80,7 +86,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
         : null,
     maxUploadBytes,
     autoMigrate: env.AUTO_MIGRATE !== '0' && env.AUTO_MIGRATE !== 'false',
-    sessionDays: Number(env.SESSION_DAYS || 30),
+    sessionDays: positiveNumber(env.SESSION_DAYS, 30),
   };
 }
 

@@ -64,4 +64,21 @@ describe('SigV4 預簽名', () => {
       'response-content-disposition=attachment%3B%20filename%3D%22a.pdf%22',
     );
   });
+
+  it('查詢參數依參數名排序，鍵互為前綴時也正確', async () => {
+    const result = await presign({
+      method: 'GET',
+      host: 'bucket.example.com',
+      path: '/a.txt',
+      region: 'us-east-1',
+      accessKeyId: 'key',
+      secretAccessKey: 'secret',
+      expiresIn: 60,
+      now: new Date('2026-01-01T00:00:00Z'),
+      extraQuery: { 'x-id': '2', x: '1' },
+    });
+    const query = result.canonicalRequest.split('\n')[2];
+    const keys = query.split('&').map((pair) => pair.split('=')[0]);
+    expect(keys.slice(-2)).toEqual(['x', 'x-id']);
+  });
 });

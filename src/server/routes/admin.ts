@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { requireAdmin, requireAuth } from '../auth';
 import { publicConfig } from '../config';
 import type { AppBindings } from '../context';
+import { parseLimit } from '../http';
 import { ISO_TIME, SCHEMA_VERSION } from '../schema';
 
 export const adminRoutes = new Hono<AppBindings>();
@@ -42,7 +43,7 @@ adminRoutes.get('/overview', async (c) => {
 
 adminRoutes.get('/audit', async (c) => {
   requireAdmin(c.get('user'));
-  const limit = Math.min(Math.max(Number(c.req.query('limit') || 60), 1), 200);
+  const limit = parseLimit(c.req.query('limit'), 60, 200);
   const rows = await c.get('db').query<{
     id: string;
     actorName: string | null;
