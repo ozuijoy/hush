@@ -117,11 +117,11 @@ export function clientIp(c: Context): string {
   return forwarded.split(',')[0].trim().slice(0, 64) || 'local';
 }
 /** RFC 5987 檔名，避免中文檔名在 Content-Disposition 壞掉。 */
-export function contentDisposition(name: string): string {
+export function contentDisposition(name: string, type: 'attachment' | 'inline' = 'attachment'): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
   const encoded = encodeURIComponent(name).replace(
     /['()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }

@@ -1,6 +1,7 @@
 /**
  * S3 相容物件儲存（預簽名 URL）。
  */
+import type { PreviewInfo } from '../../shared/preview';
 import type { S3Config } from '../config';
 import { encodeObjectPath, presign, rfc3986 } from '../sigv4';
 import { contentDisposition } from '../http';
@@ -8,6 +9,8 @@ import type { DownloadTarget, Storage, StoredFile, UploadTarget } from './types'
 
 const UPLOAD_TTL = 900;
 const DOWNLOAD_TTL = 300;
+/** 預覽網址給長一點：影片、音檔播放到一半網址過期會無法再拖曳進度。 */
+const PREVIEW_TTL = 3600;
 
 export class S3Storage implements Storage {
   readonly driver = 's3' as const;
@@ -54,8 +57,15 @@ export class S3Storage implements Storage {
     };
   }
 
-  async downloadTarget(file: StoredFile): Promise<DownloadTarget> {
+  async downloadTarget(file: StoredFile, preview?: PreviewInfo | null): Promise<DownloadTarget> {
     const { protocol, host, path } = this.locate(file);
+    const expiresIn = preview ? PREVIEW_TTL : DOWNLOAD_TTL;
+    const extraQuery: Record<string, string> = preview
+      ? {
+          'response-content-disposition': contentDisposition(file.name, 'inline'),
+          'response-content-type': preview.contentType,
+        }
+      : { 'response-content-disposition': contentDisposition(file.name) };
     const { url } = await presign({
       method: 'GET',
       protocol,
@@ -64,10 +74,10 @@ export class S3Storage implements Storage {
       region: this.s3.region,
       accessKeyId: this.s3.accessKeyId,
       secretAccessKey: this.s3.secretAccessKey,
-      expiresIn: DOWNLOAD_TTL,
-      extraQuery: { 'response-content-disposition': contentDisposition(file.name) },
+      expiresIn,
+      extraQuery,
     });
-    return { url, expiresIn: DOWNLOAD_TTL, mode: 'presigned' };
+    return { url, expiresIn, mode: 'presigned', inline: Boolean(preview) };
   }
 
   async save(): Promise<void> {

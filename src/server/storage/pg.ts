@@ -4,6 +4,7 @@
  * 只用於本機開發、測試或沒有物件儲存可用的臨時環境；
  * 受限於 Netlify 同步函式的 6 MB 請求上限，單檔上限 4 MB。
  */
+import type { PreviewInfo } from '../../shared/preview';
 import { PG_UPLOAD_LIMIT } from '../config';
 import type { Sql } from '../types';
 import type { DownloadTarget, Storage, StoredFile, UploadTarget } from './types';
@@ -41,8 +42,14 @@ export class PgStorage implements Storage {
     };
   }
 
-  async downloadTarget(file: StoredFile): Promise<DownloadTarget> {
-    return { url: `/api/files/${file.id}/content`, expiresIn: 0, mode: 'proxy' };
+  async downloadTarget(file: StoredFile, preview?: PreviewInfo | null): Promise<DownloadTarget> {
+    const inline = Boolean(preview);
+    return {
+      url: `/api/files/${file.id}/content${inline ? '?inline=1' : ''}`,
+      expiresIn: 0,
+      mode: 'proxy',
+      inline,
+    };
   }
 
   async save(fileId: string, bytes: Uint8Array): Promise<void> {

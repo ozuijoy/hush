@@ -94,7 +94,9 @@ bucket 需開放 CORS 讓瀏覽器能 PUT：
 ]
 ```
 
-Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專案設定裡加 allowed origins；MinIO 用 `mc anonymous`/`mc cors` 設定，並加 `S3_FORCE_PATH_STYLE=true`。
+Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專案設定裡加 allowed origins；MinIO 用 `mc anonymous`/`mc cors` 設定，並加 `S3_FORCE_PATH_STYLE=true`。Neon Object Storage 也需要 `S3_FORCE_PATH_STYLE=true`（它的憑證不涵蓋 `bucket.endpoint` 這種子網域）。
+
+檔案預覽（圖片、音訊、影片、PDF 用 `<img>`/`<audio>`/`<video>`/`<iframe>` 直接載入）不需要 CORS；純文字預覽會先用 `fetch` 讀內容，bucket 沒開 GET 的 CORS 時自動改用 iframe 顯示。預覽網址由後端依白名單決定 inline 與 Content-Type（SVG、HTML 一律以純文字顯示），效期 1 小時；一般下載仍是 attachment、5 分鐘。
 
 ## 環境變數
 
@@ -140,7 +142,8 @@ npm run check   # typecheck + 全部測試 + production build
 - `tests/sigv4.test.ts`：對上 AWS 官方文件的簽章範例，並檢查查詢參數排序。
 - `tests/password.test.ts`：PBKDF2 雜湊/驗證/錯誤格式。
 - `tests/config.test.ts`：環境變數解析（儲存模式、上傳上限、SESSION_DAYS 預設值）。
-- `tests/api.test.ts`：以 PGlite 跑 24 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、置頂（權限、取代、輪詢同步、刪除時取消）、搜尋（中英文、檔名、篩選、萬用字元跳脫）與前後文、訊息刪除墓碑、檔案上傳下載與大小檢查、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
+- `tests/preview.test.ts`：可預覽類型判斷（圖片、音訊、影片、PDF、文字；SVG/HTML 只以純文字顯示），以及 S3 預覽網址（inline、覆寫 Content-Type、效期 1 小時）。
+- `tests/api.test.ts`：以 PGlite 跑 25 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、置頂（權限、取代、輪詢同步、刪除時取消）、搜尋（中英文、檔名、篩選、萬用字元跳脫）與前後文、訊息刪除墓碑、檔案上傳下載與大小檢查、檔案預覽（inline 白名單、HTML 不以 text/html 回傳）、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
 
 ## 結構
 

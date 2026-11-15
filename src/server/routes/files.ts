@@ -12,6 +12,7 @@ import { PG_UPLOAD_LIMIT } from '../config';
 import { HttpError, contentDisposition, readJson, requireString, safeFileName } from '../http';
 import { ISO_TIME } from '../schema';
 import { createStorage, storageKeyFor } from '../storage';
+import { previewInfo } from '../../shared/preview';
 import { fetchMessageById } from './messages';
 
 export const fileRoutes = new Hono<AppBindings>();
@@ -185,14 +186,20 @@ fileRoutes.get('/:id/url', async (c) => {
   const file = await loadFile(c, c.req.param('id'));
   if (!file || file.status !== 'ready') throw new HttpError(404, 'not_found', '找不到這個檔案。');
 
-  const target = await createStorage(c.get('config'), c.get('db')).downloadTarget({
-    id: file.id,
-    name: file.name,
-    mime: file.mime,
-    sizeBytes: Number(file.sizeBytes),
-    storageKey: file.storageKey,
-  });
-  return c.json(target);
+  // ?inline=1：可預覽的類型回傳 inline 網址；其餘類型照舊以附件下載。
+  const wantsInline = c.req.query('inline') === '1';
+  const preview = wantsInline ? previewInfo(file.name, file.mime, Number(file.sizeBytes)) : null;
+  const target = await createStorage(c.get('config'), c.get('db')).downloadTarget(
+    {
+      id: file.id,
+      name: file.name,
+      mime: file.mime,
+      sizeBytes: Number(file.sizeBytes),
+      storageKey: file.storageKey,
+    },
+    preview,
+  );
+  return c.json({ ...target, preview: preview?.kind ?? null });
 });
 
 fileRoutes.get('/:id/content', async (c) => {
@@ -207,15 +214,22 @@ fileRoutes.get('/:id/content', async (c) => {
   const bytes = await createStorage(config, c.get('db')).load(file.id);
   if (!bytes) throw new HttpError(404, 'not_found', '檔案內容不存在。');
 
-  return new Response(bytes as unknown as BodyInit, {
-    headers: {
-      'Content-Type': file.mime,
-      'Content-Length': String(bytes.byteLength),
-      'Content-Disposition': contentDisposition(file.name),
-      'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
+  const preview =
+    c.req.query('inline') === '1' ? previewInfo(file.name, file.mime, Number(file.sizeBytes)) : null;
+  const headers: Record<string, string> = {
+    // 附件也不直接沿用上傳者宣告的 MIME：同源回應若被當成 HTML 開啟會在站內執行。
+    'Content-Type': preview ? preview.contentType : 'application/octet-stream',
+    'Content-Length': String(bytes.byteLength),
+    'Content-Disposition': contentDisposition(file.name, preview ? 'inline' : 'attachment'),
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  };
+  if (preview && preview.kind !== 'pdf') {
+    // 預覽內容與網站同源：再加一層沙箱，就算被直接開啟也不能執行腳本。
+    // （PDF 不加：Chrome 不在沙箱 frame 裏顯示 PDF。PDF 由瀏覽器內建檢視器開啟，不執行頁面腳本。）
+    headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+  }
+  return new Response(bytes as unknown as BodyInit, { headers });
 });
 
 fileRoutes.delete('/:id', async (c) => {

@@ -2,7 +2,8 @@ import { useRef, useState, type DragEvent } from 'react';
 import { api, downloadFile, uploadFile } from '../lib/api';
 import { fileKind, formatBytes, formatRelative } from '../lib/format';
 import type { FileItem, User } from '../lib/types';
-import { DownloadIcon, PlusIcon, TrashIcon } from '../components/Icons';
+import { DownloadIcon, EyeIcon, PlusIcon, TrashIcon } from '../components/Icons';
+import { FilePreview, canPreview, type PreviewableFile } from '../components/FilePreview';
 import {
   Button,
   EmptyState,
@@ -76,9 +77,11 @@ export function FilesView({
     void runUpload(Array.from(event.dataTransfer.files));
   };
 
-  const download = async (file: FileItem) => {
+  const [previewing, setPreviewing] = useState<PreviewableFile | null>(null);
+
+  const download = async (file: PreviewableFile) => {
     try {
-      await downloadFile(file);
+      await downloadFile({ createdAt: '', uploader: null, ...file });
     } catch (caught) {
       toast(caught instanceof Error ? caught.message : '無法取得下載網址。', 'error');
     }
@@ -188,13 +191,28 @@ export function FilesView({
                 <li key={file.id} className="group flex items-center gap-3 px-4 py-3.5 transition hover:bg-white/[0.025]">
                   <FileGlyph kind={fileKind(file.name, file.mime)} size={40} />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13.5px] font-medium text-white/85">{file.name}</p>
+                    {canPreview(file) ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreviewing(file)}
+                        className="block max-w-full truncate text-left text-[13.5px] font-medium text-white/85 hover:text-white hover:underline"
+                      >
+                        {file.name}
+                      </button>
+                    ) : (
+                      <p className="truncate text-[13.5px] font-medium text-white/85">{file.name}</p>
+                    )}
                     <p className="mt-0.5 truncate text-[11px] text-white/35">
                       {formatBytes(file.size)} · {file.uploader?.name ?? '已移除的成員'} ·{' '}
                       {formatRelative(file.createdAt)}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1 opacity-70 transition group-hover:opacity-100">
+                    {canPreview(file) ? (
+                      <IconButton label="預覽" onClick={() => setPreviewing(file)}>
+                        <EyeIcon size={16} />
+                      </IconButton>
+                    ) : null}
                     <IconButton label="下載" onClick={() => void download(file)}>
                       <DownloadIcon size={16} />
                     </IconButton>
@@ -210,6 +228,8 @@ export function FilesView({
           )}
         </div>
       </div>
+
+      <FilePreview file={previewing} onClose={() => setPreviewing(null)} onDownload={(file) => void download(file)} />
 
       <Modal
         open={Boolean(confirm)}

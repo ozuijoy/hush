@@ -351,6 +351,65 @@ describe('Hush API', () => {
     expect(Array.from(received)).toEqual(Array.from(fileBytes));
   });
 
+  it('檔案預覽：inline 網址只給白名單類型，HTML/SVG 不會在站內被渲染', async () => {
+    const upload = async (name: string, mime: string, bytes: Uint8Array) => {
+      const presigned = await (
+        await call('/api/files/presign', {
+          method: 'POST',
+          cookie: aliceCookie,
+          body: { name, size: bytes.byteLength, mime },
+        })
+      ).json();
+      await app.request(presigned.upload.url, {
+        method: 'PUT',
+        headers: { cookie: aliceCookie, 'content-type': 'application/octet-stream' },
+        body: bytes as unknown as BodyInit,
+      });
+      await call(`/api/files/${presigned.fileId}/complete`, { method: 'POST', cookie: aliceCookie, body: {} });
+      return presigned.fileId as string;
+    };
+
+    // 文字檔：inline 預覽，強制 text/plain 並加沙箱。
+    const preview = await (await call(`/api/files/${fileId}/url?inline=1`, { cookie: aliceCookie })).json();
+    expect(preview.inline).toBe(true);
+    expect(preview.preview).toBe('text');
+    expect(preview.url).toBe(`/api/files/${fileId}/content?inline=1`);
+    const inline = await call(preview.url, { cookie: aliceCookie });
+    expect(inline.status).toBe(200);
+    expect(inline.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(inline.headers.get('content-disposition')).toMatch(/^inline;/);
+    expect(inline.headers.get('content-security-policy')).toContain('sandbox');
+
+    // 圖片：副檔名正確但 MIME 空白也能預覽。
+    const png = await upload('截圖.png', '', new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    const pngTarget = await (await call(`/api/files/${png}/url?inline=1`, { cookie: aliceCookie })).json();
+    expect(pngTarget.preview).toBe('image');
+    const pngInline = await call(pngTarget.url, { cookie: aliceCookie });
+    expect(pngInline.headers.get('content-type')).toBe('image/png');
+
+    // HTML：預覽只看原始碼；一般下載也不帶 text/html。
+    const html = await upload('page.html', 'text/html', new TextEncoder().encode('<script>alert(1)</script>'));
+    const htmlTarget = await (await call(`/api/files/${html}/url?inline=1`, { cookie: aliceCookie })).json();
+    expect(htmlTarget.preview).toBe('text');
+    const htmlInline = await call(htmlTarget.url, { cookie: aliceCookie });
+    expect(htmlInline.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    const htmlDownload = await call(`/api/files/${html}/content`, { cookie: aliceCookie });
+    expect(htmlDownload.headers.get('content-type')).toBe('application/octet-stream');
+    expect(htmlDownload.headers.get('content-disposition')).toMatch(/^attachment;/);
+
+    // 不能預覽的類型：要求 inline 也只回附件。
+    const zip = await upload('備份.zip', 'application/zip', new Uint8Array([1, 2, 3]));
+    const zipTarget = await (await call(`/api/files/${zip}/url?inline=1`, { cookie: aliceCookie })).json();
+    expect(zipTarget.inline).toBe(false);
+    expect(zipTarget.preview).toBeNull();
+    const zipInline = await call(`/api/files/${zip}/content?inline=1`, { cookie: aliceCookie });
+    expect(zipInline.headers.get('content-disposition')).toMatch(/^attachment;/);
+
+    for (const id of [png, html, zip]) {
+      expect((await call(`/api/files/${id}`, { method: 'DELETE', cookie: adminCookie })).status).toBe(200);
+    }
+  });
+
   it('上傳大小不一致或超過上限會被拒絕，未完成的檔案不能下載', async () => {
     const presign = await call('/api/files/presign', {
       method: 'POST',

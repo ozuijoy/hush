@@ -60,6 +60,14 @@ export interface PresignResponse {
   };
 }
 
+export interface FileTarget {
+  url: string;
+  expiresIn: number;
+  mode: 'presigned' | 'proxy';
+  inline: boolean;
+  preview: 'image' | 'audio' | 'video' | 'pdf' | 'text' | null;
+}
+
 export const api = {
   me: () => request<SessionPayload>('/api/auth/me'),
   login: (username: string, password: string) =>
@@ -111,7 +119,8 @@ export const api = {
       body: body({ caption }),
     }),
   fileUrl: (fileId: string) =>
-    request<{ url: string; expiresIn: number; mode: 'presigned' | 'proxy' }>(`/api/files/${fileId}/url`),
+    request<FileTarget>(`/api/files/${fileId}/url`),
+  previewUrl: (fileId: string) => request<FileTarget>(`/api/files/${fileId}/url?inline=1`),
   deleteFile: (fileId: string) =>
     request<{ ok: true; id: string }>(`/api/files/${fileId}`, { method: 'DELETE' }),
 
@@ -158,4 +167,26 @@ export async function downloadFile(file: FileItem): Promise<void> {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
+}
+const previewCache = new Map<string, { target: Promise<FileTarget>; expiresAt: number }>();
+
+/**
+ * 取得 inline 預覽網址，並在效期內重複使用（聊天室裏同一張圖不用每次重新簽）。
+ * `force` 用在圖片/影片載入失敗時重新取得。
+ */
+export function getPreviewTarget(fileId: string, force = false): Promise<FileTarget> {
+  const cached = previewCache.get(fileId);
+  if (!force && cached && cached.expiresAt > Date.now()) return cached.target;
+
+  const target = api.previewUrl(fileId);
+  const entry = { target, expiresAt: Number.POSITIVE_INFINITY };
+  previewCache.set(fileId, entry);
+  target.then(
+    (value) => {
+      // 提前 2 分鐘視為過期；proxy 模式（expiresIn 0）不會過期。
+      entry.expiresAt = value.expiresIn > 0 ? Date.now() + (value.expiresIn - 120) * 1000 : Number.POSITIVE_INFINITY;
+    },
+    () => previewCache.delete(fileId),
+  );
+  return target;
 }

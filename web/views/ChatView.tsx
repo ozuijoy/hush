@@ -15,6 +15,8 @@ import {
   XIcon,
 } from '../components/Icons';
 import { SearchPanel } from './SearchPanel';
+import { AudioInline, FilePreview, ImageThumb, canPreview, type PreviewableFile } from '../components/FilePreview';
+import { previewInfo } from '../../src/shared/preview';
 import { Avatar, Badge, Button, EmptyState, FileGlyph, Modal, Spinner, cx, IconButton } from '../components/ui';
 import { useToast } from '../components/Toast';
 
@@ -39,6 +41,7 @@ export function ChatView({
   const [uploading, setUploading] = useState(0);
   const [confirm, setConfirm] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [previewing, setPreviewing] = useState<PreviewableFile | null>(null);
   const toast = useToast();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -105,7 +108,7 @@ export function ChatView({
     if (fileInput.current) fileInput.current.value = '';
   };
 
-  const download = async (file: NonNullable<Message['file']>) => {
+  const download = async (file: PreviewableFile) => {
     try {
       await downloadFile({
         id: file.id,
@@ -367,23 +370,11 @@ export function ChatView({
                                 {message.body}
                               </div>
                             ) : null}
-                            <button
-                              type="button"
-                              onClick={() => void download(message.file!)}
-                              className="flex w-[280px] max-w-full items-center gap-3 rounded-2xl border border-white/[0.08] bg-[#151824] p-2.5 pr-3 text-left transition hover:border-white/[0.16] hover:bg-[#1a1e2b]"
-                            >
-                              <FileGlyph kind={fileKind(message.file.name, message.file.mime)} size={38} />
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-[13px] font-medium text-white/85">
-                                  {message.file.name}
-                                </span>
-                                <span className="block text-[11px] text-white/35">
-                                  {formatBytes(message.file.size)}
-                                  {message.file.deleted ? ' · 已由管理員移除' : ''}
-                                </span>
-                              </span>
-                              <DownloadIcon size={16} className="shrink-0 text-white/35" />
-                            </button>
+<FileMessage
+                              file={message.file}
+                              onPreview={() => setPreviewing(message.file!)}
+                              onDownload={() => void download(message.file!)}
+                            />
                           </div>
                         ) : (
                           <div
@@ -509,6 +500,8 @@ export function ChatView({
         onSelect={scrollToMessage}
       />
 
+      <FilePreview file={previewing} onClose={() => setPreviewing(null)} onDownload={(file) => void download(file)} />
+
       <Modal
         open={Boolean(confirm)}
         onClose={() => setConfirm(null)}
@@ -526,5 +519,45 @@ export function ChatView({
         }
       />
     </section>
+  );
+}
+/** 檔案訊息：圖片顯示縮圖、音訊顯示播放器；可預覽的卡片點了開預覽，其餘直接下載。 */
+function FileMessage({
+  file,
+  onPreview,
+  onDownload,
+}: {
+  file: NonNullable<Message['file']>;
+  onPreview: () => void;
+  onDownload: () => void;
+}) {
+  const previewable = canPreview(file);
+  const kind = previewable ? previewInfo(file.name, file.mime, file.size)?.kind : null;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {kind === 'image' ? <ImageThumb file={file} onOpen={onPreview} /> : null}
+      <div className="flex w-[280px] max-w-full items-center gap-1 rounded-2xl border border-white/[0.08] bg-[#151824] p-2.5 pr-1.5 transition hover:border-white/[0.16] hover:bg-[#1a1e2b]">
+        <button
+          type="button"
+          onClick={previewable ? onPreview : onDownload}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          title={previewable ? '預覽' : '下載'}
+        >
+          <FileGlyph kind={fileKind(file.name, file.mime)} size={38} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium text-white/85">{file.name}</span>
+            <span className="block text-[11px] text-white/35">
+              {formatBytes(file.size)}
+              {file.deleted ? ' · 已由管理員移除' : previewable ? ' · 點一下預覽' : ''}
+            </span>
+          </span>
+        </button>
+        <IconButton label="下載" onClick={onDownload} disabled={file.deleted}>
+          <DownloadIcon size={16} className="text-white/45" />
+        </IconButton>
+      </div>
+      {kind === 'audio' ? <AudioInline file={file} /> : null}
+    </div>
   );
 }
