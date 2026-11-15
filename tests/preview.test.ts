@@ -25,8 +25,8 @@ describe('previewInfo', () => {
 describe('S3Storage 預覽網址', () => {
   const storage = new S3Storage({
     endpoint: 'https://storage.example.com',
-    region: 'ap-southeast-1',
-    bucket: 'hush-files',
+    region: 'us-test-1',
+    bucket: 'test-bucket',
     accessKeyId: 'AKIDEXAMPLE',
     secretAccessKey: 'secret',
     forcePathStyle: true,
@@ -38,7 +38,7 @@ describe('S3Storage 預覽網址', () => {
     const target = await storage.downloadTarget(file, previewInfo(file.name, file.mime));
     const url = new URL(target.url);
     expect(target.inline).toBe(true);
-    expect(url.pathname).toBe('/hush-files/f1/photo.jpg');
+    expect(url.pathname).toBe('/test-bucket/f1/photo.jpg');
     expect(url.searchParams.get('response-content-disposition')).toMatch(/^inline;/);
     expect(url.searchParams.get('response-content-type')).toBe('image/jpeg');
     expect(url.searchParams.get('X-Amz-Expires')).toBe('3600');
