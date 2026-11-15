@@ -3,6 +3,7 @@
  */
 import type { Context } from 'hono';
 import type { Config } from './config';
+import type { Outbound } from './outbound';
 import type { SessionUser, Sql } from './types';
 
 export type AppBindings = {
@@ -11,6 +12,7 @@ export type AppBindings = {
     db: Sql;
     config: Config;
     user: SessionUser;
+    outbound: Outbound;
   };
 };
 

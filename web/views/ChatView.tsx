@@ -17,6 +17,7 @@ import {
 import { SearchPanel } from './SearchPanel';
 import { AudioInline, FilePreview, ImageThumb, canPreview, type PreviewableFile } from '../components/FilePreview';
 import { previewInfo } from '../../src/shared/preview';
+import { LinkMediaList, MessageText } from '../components/LinkPreview';
 import { Avatar, Badge, Button, EmptyState, FileGlyph, Modal, Spinner, cx, IconButton } from '../components/ui';
 import { useToast } from '../components/Toast';
 
@@ -367,9 +368,10 @@ export function ChatView({
                                     : 'rounded-bl-md border border-white/[0.06] bg-[#141722] text-white/90',
                                 )}
                               >
-                                {message.body}
+                                <MessageText body={message.body} own={own} />
                               </div>
                             ) : null}
+                            <LinkMediaList body={message.body} />
 <FileMessage
                               file={message.file}
                               onPreview={() => setPreviewing(message.file!)}
@@ -377,15 +379,18 @@ export function ChatView({
                             />
                           </div>
                         ) : (
-                          <div
-                            className={cx(
-                              'max-w-full whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-relaxed',
-                              own
-                                ? 'rounded-br-md bg-gradient-to-br from-[#7b68ff] to-[#5f4ce8] text-white shadow-[0_10px_30px_-14px_rgba(99,80,240,0.9)]'
-                                : 'rounded-bl-md border border-white/[0.06] bg-[#141722] text-white/90',
-                            )}
-                          >
-                            {message.body}
+                          <div className={cx('flex min-w-0 max-w-full flex-col gap-1.5', own ? 'items-end' : 'items-start')}>
+                            <div
+                              className={cx(
+                                'max-w-full whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-relaxed',
+                                own
+                                  ? 'rounded-br-md bg-gradient-to-br from-[#7b68ff] to-[#5f4ce8] text-white shadow-[0_10px_30px_-14px_rgba(99,80,240,0.9)]'
+                                  : 'rounded-bl-md border border-white/[0.06] bg-[#141722] text-white/90',
+                              )}
+                            >
+                              <MessageText body={message.body ?? ''} own={own} />
+                            </div>
+                            {!message.pending ? <LinkMediaList body={message.body} /> : null}
                           </div>
                         )}
 

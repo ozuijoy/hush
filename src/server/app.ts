@@ -16,12 +16,17 @@ import { adminRoutes } from './routes/admin';
 import { authRoutes } from './routes/auth';
 import { fileRoutes } from './routes/files';
 import { memberRoutes } from './routes/members';
+import { mediaRoutes } from './routes/media';
 import { messageRoutes } from './routes/messages';
+import { defaultOutbound } from './outbound';
+import type { Outbound } from './outbound';
 import type { Sql } from './types';
 
 export interface AppDeps {
   sql: Sql;
   config: Config;
+  /** 測試用：替換對外連線與 DNS 解析。 */
+  outbound?: Outbound;
 }
 
 function buildApi(deps?: AppDeps) {
@@ -30,10 +35,12 @@ function buildApi(deps?: AppDeps) {
   api.use('*', csrfGuard);
   api.use('*', async (c, next) => {
     await next();
-    c.header('Cache-Control', 'no-store');
+    // 路由自己設定的快取（例如外鏈媒體）保留，其餘一律 no-store。
+    if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
     c.header('X-Content-Type-Options', 'nosniff');
   });
   api.use('*', async (c, next) => {
+    c.set('outbound', deps?.outbound ?? defaultOutbound);
     if (deps) {
       c.set('config', deps.config);
       c.set('db', deps.sql);
@@ -65,6 +72,7 @@ function buildApi(deps?: AppDeps) {
   api.route('/messages', messageRoutes);
   api.route('/files', fileRoutes);
   api.route('/members', memberRoutes);
+  api.route('/media', mediaRoutes);
   api.route('/admin', adminRoutes);
 
   return api;

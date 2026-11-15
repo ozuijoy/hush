@@ -190,3 +190,28 @@ export function getPreviewTarget(fileId: string, force = false): Promise<FileTar
   );
   return target;
 }
+
+export interface MediaInfo {
+  kind: 'image' | 'audio' | 'video' | null;
+  size: number | null;
+  previewable: boolean;
+  reason: 'too_large' | 'not_media' | 'unreachable' | null;
+  limit: number;
+}
+
+/** 外鏈媒體經 Hush 代抓的網址：瀏覽器只連到自己的網站。 */
+export function mediaProxyUrl(url: string): string {
+  return `/api/media?url=${encodeURIComponent(url)}`;
+}
+
+const mediaInfoCache = new Map<string, Promise<MediaInfo | null>>();
+
+/** 查詢外鏈是否為可預覽的媒體；同一個網址只查一次，失敗視為不可預覽。 */
+export function getMediaInfo(url: string): Promise<MediaInfo | null> {
+  let cached = mediaInfoCache.get(url);
+  if (!cached) {
+    cached = request<MediaInfo>(`/api/media/info?url=${encodeURIComponent(url)}`).catch(() => null);
+    mediaInfoCache.set(url, cached);
+  }
+  return cached;
+}

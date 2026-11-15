@@ -17,7 +17,7 @@ export function canPreview(file: { name: string; mime: string; size: number; del
 }
 
 /** 只在元素進入畫面附近時才取得網址，避免一打開聊天室就替每張圖簽名。 */
-function useVisible<T extends Element>(): [React.RefObject<T | null>, boolean] {
+export function useVisible<T extends Element>(): [React.RefObject<T | null>, boolean] {
   const ref = useRef<T>(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
