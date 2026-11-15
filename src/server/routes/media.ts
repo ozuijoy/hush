@@ -54,7 +54,7 @@ mediaRoutes.get('/', async (c) => {
   const meta = mediaMeta(response, url);
   if (!meta) return fail(new HttpError(415, 'not_media', '這個網址不是可預覽的圖片、音訊或影片。'));
   if (meta.size !== null && meta.size > MEDIA_PROXY_LIMIT) {
-    return fail(new HttpError(413, 'media_too_large', '檔案超過 6 MB，無法預覽。'));
+    return fail(new HttpError(413, 'media_too_large', '檔案超過 4 MB，無法預覽。'));
   }
 
   const headers: Record<string, string> = {

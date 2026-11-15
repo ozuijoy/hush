@@ -15,7 +15,11 @@
 import { HttpError } from './http';
 import { previewInfo, type PreviewKind } from '../shared/preview';
 
-export const MEDIA_PROXY_LIMIT = 6 * 1024 * 1024;
+/**
+ * 外鏈媒體上限 4 MB：Netlify 同步函式回應上限 6 MB，二進位內容經 base64 編碼後會膨脹約 1/3，
+ * 與 Postgres 直存模式（PG_UPLOAD_LIMIT）採同樣的安全邊界。
+ */
+export const MEDIA_PROXY_LIMIT = 4 * 1024 * 1024;
 export const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 8000;
 const MAX_URL_LENGTH = 2048;

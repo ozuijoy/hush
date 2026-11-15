@@ -135,7 +135,7 @@ describe('外鏈媒體代理 API', () => {
     expect(requested[0].headers).not.toHaveProperty('cookie');
   });
 
-  it('info：媒體回報種類與大小，超過 6 MB 不可預覽', async () => {
+  it('info：媒體回報種類與大小，超過 4 MB 不可預覽', async () => {
     expect(await info('https://cdn.example.com/cat.png')).toMatchObject({ kind: 'image', size: png.length, previewable: true });
     expect(await info('https://cdn.example.com/song')).toMatchObject({ kind: 'audio', size: null, previewable: true });
     expect(await info('https://cdn.example.com/big.mp4')).toMatchObject({ kind: 'video', previewable: false, reason: 'too_large' });
@@ -143,7 +143,7 @@ describe('外鏈媒體代理 API', () => {
     expect(await info('https://cdn.example.com/no-head.png')).toMatchObject({ kind: 'image', previewable: true });
   });
 
-  it('超過 6 MB 回 413；HTML、SVG 不轉送', async () => {
+  it('超過 4 MB 回 413；HTML、SVG 不轉送', async () => {
     expect((await media('https://cdn.example.com/big.mp4')).status).toBe(413);
     expect((await media('https://cdn.example.com/page.png')).status).toBe(415);
     expect((await media('https://cdn.example.com/logo.svg')).status).toBe(415);
@@ -163,5 +163,12 @@ describe('外鏈媒體代理 API', () => {
     const res = await media('https://cdn.example.com/to-cat');
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('image/png');
+  });
+});
+
+describe('外鏈媒體上限', () => {
+  it('低於 Netlify 6 MB 回應上限扣掉 base64 膨脹後的大小', () => {
+    expect(MEDIA_PROXY_LIMIT).toBe(4 * 1024 * 1024);
+    expect(Math.ceil(MEDIA_PROXY_LIMIT / 3) * 4).toBeLessThan(6 * 1024 * 1024);
   });
 });

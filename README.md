@@ -98,7 +98,7 @@ Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專�
 
 檔案預覽（圖片、音訊、影片、PDF 用 `<img>`/`<audio>`/`<video>`/`<iframe>` 直接載入）不需要 CORS；純文字預覽會先用 `fetch` 讀內容，bucket 沒開 GET 的 CORS 時自動改用 iframe 顯示。預覽網址由後端依白名單決定 inline 與 Content-Type（SVG、HTML 一律以純文字顯示），效期 1 小時；一般下載仍是 attachment、5 分鐘。
 
-訊息裡的網址會變成連結；若網址是圖片、音訊或影片，由後端代抓後直接在聊天室預覽（`/api/media?url=`），成員的瀏覽器只連到 Hush，外部網站只看得到伺服器的 IP。只轉送 6 MB 以內、白名單內的媒體類型（SVG、HTML 不轉送），超過就只顯示連結；並擋下 localhost、私有／鏈路本地等內部位址（含 DNS 解析後與每一次轉址）。點開連結本身仍是直接連到對方網站。
+訊息裡的網址會變成連結；若網址是圖片、音訊或影片，由後端代抓後直接在聊天室預覽（`/api/media?url=`），成員的瀏覽器只連到 Hush，外部網站只看得到伺服器的 IP。只轉送 4 MB 以內（Netlify 回應上限 6 MB，扣掉 base64 膨脹）、白名單內的媒體類型（SVG、HTML 不轉送），超過就只顯示連結；並擋下 localhost、私有／鏈路本地等內部位址（含 DNS 解析後與每一次轉址）。點開連結本身仍是直接連到對方網站。
 
 ## 環境變數
 
@@ -146,7 +146,7 @@ npm run check   # typecheck + 全部測試 + production build
 - `tests/config.test.ts`：環境變數解析（儲存模式、上傳上限、SESSION_DAYS 預設值）。
 - `tests/preview.test.ts`：可預覽類型判斷（圖片、音訊、影片、PDF、文字；SVG/HTML 只以純文字顯示），以及 S3 預覽網址（inline、覆寫 Content-Type、效期 1 小時）。
 - `tests/api.test.ts`：以 PGlite 跑 25 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、置頂（權限、取代、輪詢同步、刪除時取消）、搜尋（中英文、檔名、篩選、萬用字元跳脫）與前後文、訊息刪除墓碑、檔案上傳下載與大小檢查、檔案預覽（inline 白名單、HTML 不以 text/html 回傳）、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
-- `tests/media.test.ts`：外鏈媒體代理——內部位址判斷（IPv4／IPv6／內嵌 IPv4）、網址格式、內文網址切割，以及端到端：未登入 401、圖片轉送與快取標頭、info 回報大小（超過 6 MB 不可預覽、HEAD 不支援時改用 GET）、413／415、DNS 指向私有位址與轉址到內部都擋下、公開轉址會跟隨。
+- `tests/media.test.ts`：外鏈媒體代理（含 4 MB 上限檢查）——內部位址判斷（IPv4／IPv6／內嵌 IPv4）、網址格式、內文網址切割，以及端到端：未登入 401、圖片轉送與快取標頭、info 回報大小（超過 4 MB 不可預覽、HEAD 不支援時改用 GET）、413／415、DNS 指向私有位址與轉址到內部都擋下、公開轉址會跟隨。
 
 ## 結構
 

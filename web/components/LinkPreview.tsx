@@ -54,7 +54,7 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
   );
 }
 
-/** 單一外鏈：經後端代抓；不是媒體、超過 6 MB 或載入失敗時什麼都不顯示（連結本身仍在內文裡）。 */
+/** 單一外鏈：經後端代抓；不是媒體、超過 4 MB 或載入失敗時什麼都不顯示（連結本身仍在內文裡）。 */
 function LinkMedia({ url }: { url: string }) {
   const [ref, visible] = useVisible<HTMLDivElement>();
   const [info, setInfo] = useState<MediaInfo | null | undefined>(undefined);
