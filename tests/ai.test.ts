@@ -45,15 +45,22 @@ function sse(pieces: string[], { done = true, extra = [] as string[] } = {}): Re
 const defaultReply = () => sse(['<thi', 'nk>想一下</th', 'ink>\n\n這是', '回答']);
 let reply: () => Response | Promise<Response> = defaultReply;
 
-type StreamResult = { meta?: Record<string, unknown>; text: string; done: boolean; error?: { code: string; message: string } };
+type StreamResult = {
+  meta?: Record<string, unknown>;
+  text: string;
+  thinking: string;
+  done: boolean;
+  error?: { code: string; message: string };
+};
 
 async function readStream(res: Response): Promise<StreamResult> {
   expect(res.headers.get('content-type')).toContain('application/x-ndjson');
-  const result: StreamResult = { text: '', done: false };
+  const result: StreamResult = { text: '', thinking: '', done: false };
   for (const line of (await res.text()).split('\n').filter(Boolean)) {
     const event = JSON.parse(line);
     if (event.type === 'meta') result.meta = event;
     else if (event.type === 'delta') result.text += event.text;
+    else if (event.type === 'thinking') result.thinking += event.text;
     else if (event.type === 'done') result.done = true;
     else if (event.type === 'error') result.error = { code: event.code, message: event.message };
   }
@@ -182,6 +189,75 @@ describe('AI 功能', () => {
     const sent = captured[0].body.messages;
     expect(sent[0].role).toBe('system');
     expect(sent.slice(1).map((m: { content: string }) => m.content)).toEqual(['第一題', '答一', '台北今天適合帶傘嗎？']);
+  });
+
+  it('預設關閉推理：送出各家的關閉參數與 /no_think；思考內容另外以 thinking 事件即時送出', async () => {
+    captured.length = 0;
+    const result = await readStream(await call('/api/ai/chat', { messages: [{ role: 'user', content: '你好' }] }));
+    const body = captured[0].body;
+    expect(body).toMatchObject({
+      reasoning_effort: 'none',
+      enable_thinking: false,
+      chat_template_kwargs: { enable_thinking: false },
+      reasoning: { enabled: false },
+      think: false,
+    });
+    expect(body.messages[0].content.endsWith('/no_think')).toBe(true);
+    // 預設回覆把 <think> 切成好幾段：思考與正式回覆要分開。
+    expect(result.thinking).toBe('想一下');
+    expect(result.text).toBe('這是回答');
+
+    // reasoning_content 欄位（DeepSeek 等）也算思考。
+    reply = () =>
+      sse([], {
+        extra: [
+          `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: '先想' } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: '答案' } }] })}\n\n`,
+        ],
+      });
+    const reasoning = await readStream(await call('/api/ai/chat', { messages: [{ role: 'user', content: '你好' }] }));
+    expect(reasoning).toMatchObject({ thinking: '先想', text: '答案', done: true });
+    reply = defaultReply;
+  });
+
+  it('端點不收關閉推理參數（400）就拿掉重送，並記住不再送', async () => {
+    const strict = makeApp({ ...aiEnv, AI_MODEL: 'strict-model' });
+    captured.length = 0;
+    reply = () => {
+      const last = captured[captured.length - 1];
+      return 'reasoning_effort' in last.body
+        ? new Response('unknown parameter', { status: 400 })
+        : defaultReply();
+    };
+    const first = await readStream(await call('/api/ai/polish', { text: 'hi' }, strict));
+    expect(first.text).toBe('這是回答');
+    expect(captured).toHaveLength(2);
+    expect('enable_thinking' in captured[1].body).toBe(false);
+
+    captured.length = 0;
+    await readStream(await call('/api/ai/polish', { text: 'hi' }, strict));
+    expect(captured).toHaveLength(1);
+    expect('reasoning_effort' in captured[0].body).toBe(false);
+
+    // 不是參數問題的 400 不會無限重試：重送後仍 400 就回錯誤。
+    const broken = makeApp({ ...aiEnv, AI_MODEL: 'broken-model' });
+    reply = () => new Response('bad', { status: 400 });
+    captured.length = 0;
+    expect((await call('/api/ai/polish', { text: 'hi' }, broken)).status).toBe(502);
+    expect(captured).toHaveLength(2);
+    reply = defaultReply;
+  });
+
+  it('AI_EXTRA_BODY 可以補參數或改寫關閉推理的值，但改不了 model／messages／stream', async () => {
+    const custom = makeApp({
+      ...aiEnv,
+      AI_EXTRA_BODY: JSON.stringify({ top_p: 0.5, reasoning_effort: 'minimal', model: 'hijack', stream: false }),
+    });
+    captured.length = 0;
+    await readStream(await call('/api/ai/polish', { text: 'hi' }, custom));
+    expect(captured[0].body).toMatchObject({ top_p: 0.5, reasoning_effort: 'minimal', model: 'test-model', stream: true });
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_EXTRA_BODY: '[1,2]' }).ai?.extraBody).toEqual({});
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_EXTRA_BODY: 'not json' }).ai?.extraBody).toEqual({});
   });
 
   it('問答：格式錯誤會被拒絕（system 角色、最後不是提問）', async () => {

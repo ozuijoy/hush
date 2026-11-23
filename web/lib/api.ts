@@ -78,6 +78,8 @@ export interface AiStreamHandlers {
   /** 每收到一段就呼叫，參數是目前累積的全文。 */
   onText?: (text: string) => void;
   onMeta?: (meta: Record<string, unknown>) => void;
+  /** 推理模型的思考過程（累積全文），只用來顯示進度。 */
+  onThinking?: (thinking: string) => void;
   signal?: AbortSignal;
 }
 
@@ -107,11 +109,16 @@ async function streamAi(path: string, payload: unknown, handlers: AiStreamHandle
   const decoder = new TextDecoder();
   let pending = '';
   let text = '';
+  let thinking = '';
   let finished = false;
   const handle = (line: string) => {
     if (!line.trim()) return;
     const event = JSON.parse(line) as { type: string; text?: string; code?: string; message?: string };
     if (event.type === 'meta') handlers.onMeta?.(event);
+    else if (event.type === 'thinking' && event.text) {
+      thinking += event.text;
+      handlers.onThinking?.(thinking);
+    }
     else if (event.type === 'delta' && event.text) {
       text += event.text;
       handlers.onText?.(text);
@@ -129,7 +136,13 @@ async function streamAi(path: string, payload: unknown, handlers: AiStreamHandle
     lines.forEach(handle);
   }
   handle(pending + decoder.decode());
-  if (!finished) throw new ApiError(502, 'ai_incomplete', 'AI 回覆中斷，內容可能不完整。');
+  if (!finished) {
+    throw new ApiError(
+      502,
+      'ai_incomplete',
+      '連線在回覆完成前被切斷（部署平台的串流函式有執行時間上限，Netlify 為 60 秒）。已收到的內容已保留。',
+    );
+  }
   return text;
 }
 

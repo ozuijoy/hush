@@ -30,6 +30,11 @@ export interface AiConfig {
   hourlyLimit: number;
   /** 預設用串流；AI_STREAM=false 時改成一次回傳整段。 */
   stream: boolean;
+  /**
+   * AI_EXTRA_BODY：額外併入請求的 JSON 物件，給各家自己的參數用
+   * （例如 {"reasoning_effort":"low"}）。model、messages、stream 等核心欄位不會被覆蓋。
+   */
+  extraBody: Record<string, unknown>;
 }
 
 export interface Config {
@@ -122,7 +127,20 @@ function loadAiConfig(env: Record<string, string | undefined>): AiConfig | null 
     maxTokens: Math.floor(positiveNumber(env.AI_MAX_TOKENS, 1024)),
     hourlyLimit: Math.floor(positiveNumber(env.AI_HOURLY_LIMIT, 30)),
     stream: !/^(false|0|no|off)$/i.test(env.AI_STREAM?.trim() ?? ''),
+    extraBody: parseExtraBody(env.AI_EXTRA_BODY),
   };
+}
+
+function parseExtraBody(raw: string | undefined): Record<string, unknown> {
+  if (!raw?.trim()) return {};
+  try {
+    const value = JSON.parse(raw);
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  } catch {
+    // 落到下面的錯誤訊息。
+  }
+  console.error('[hush] AI_EXTRA_BODY 不是 JSON 物件，已忽略。');
+  return {};
 }
 
 /** 給前端用的非敏感設定。 */

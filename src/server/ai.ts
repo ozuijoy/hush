@@ -20,6 +20,33 @@ export function completionsUrl(baseUrl: string): string {
   return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
 }
 
+/**
+ * 關閉推理（思考）用的參數。OpenAI 相容端點沒有統一寫法，所以把常見的幾種一起送：
+ * - reasoning_effort: 'none'：OpenAI、Groq 等
+ * - enable_thinking: false：Qwen／DashScope、部分相容服務
+ * - chat_template_kwargs.enable_thinking: false：vLLM、SGLang 自架
+ * - reasoning.enabled: false：OpenRouter
+ * - think: false：Ollama
+ * 端點不認得而回 400／422 時，自動拿掉這些參數重送一次，並記住這個端點不收。
+ */
+export const REASONING_OFF: Readonly<Record<string, unknown>> = Object.freeze({
+  reasoning_effort: 'none',
+  enable_thinking: false,
+  chat_template_kwargs: { enable_thinking: false },
+  reasoning: { enabled: false },
+  think: false,
+});
+
+/** Qwen3 等模型認得的軟開關，加在 system 訊息最後。 */
+export const NO_THINK_TAG = '/no_think';
+
+/** 不接受關閉推理參數的端點＋模型（記在記憶體，冷啟動後重新判斷）。 */
+const hintsRejected = new Set<string>();
+
+export function resetReasoningCache() {
+  hintsRejected.clear();
+}
+
 const THINK_OPEN = '<think>';
 const THINK_CLOSE = '</think>';
 
@@ -31,63 +58,76 @@ function partialSuffix(s: string, tag: string): number {
   return 0;
 }
 
+export interface StreamPiece {
+  /** text：正式回覆；thinking：推理模型的思考過程（只給前端看進度，不算回覆內容）。 */
+  kind: 'text' | 'thinking';
+  text: string;
+}
+
 /**
- * 去掉推理模型的 <think>…</think>，標籤被切在不同片段也能處理；
- * 同時去掉回覆開頭的空白。
+ * 把推理模型的 <think>…</think> 分出來當「思考」，標籤被切在不同片段也能處理；
+ * 同時去掉正式回覆開頭的空白。
  */
 export class ThinkFilter {
   private buffer = '';
   private inThink = false;
   private started = false;
 
-  push(chunk: string): string {
+  push(chunk: string): StreamPiece[] {
     this.buffer += chunk;
-    let out = '';
+    const pieces: StreamPiece[] = [];
     for (;;) {
       if (this.inThink) {
         const end = this.buffer.indexOf(THINK_CLOSE);
         if (end < 0) {
-          this.buffer = this.buffer.slice(-(THINK_CLOSE.length - 1));
+          const keep = partialSuffix(this.buffer, THINK_CLOSE);
+          this.add(pieces, 'thinking', this.buffer.slice(0, this.buffer.length - keep));
+          this.buffer = this.buffer.slice(this.buffer.length - keep);
           break;
         }
+        this.add(pieces, 'thinking', this.buffer.slice(0, end));
         this.buffer = this.buffer.slice(end + THINK_CLOSE.length);
         this.inThink = false;
         continue;
       }
       const start = this.buffer.indexOf(THINK_OPEN);
       if (start >= 0) {
-        out += this.buffer.slice(0, start);
+        this.add(pieces, 'text', this.buffer.slice(0, start));
         this.buffer = this.buffer.slice(start + THINK_OPEN.length);
         this.inThink = true;
         continue;
       }
       const keep = partialSuffix(this.buffer, THINK_OPEN);
-      out += this.buffer.slice(0, this.buffer.length - keep);
+      this.add(pieces, 'text', this.buffer.slice(0, this.buffer.length - keep));
       this.buffer = this.buffer.slice(this.buffer.length - keep);
       break;
     }
-    return this.emit(out);
+    return pieces;
   }
 
-  flush(): string {
-    const rest = this.inThink ? '' : this.buffer;
+  flush(): StreamPiece[] {
+    const pieces: StreamPiece[] = [];
+    this.add(pieces, this.inThink ? 'thinking' : 'text', this.buffer);
     this.buffer = '';
-    return this.emit(rest);
+    return pieces;
   }
 
-  private emit(text: string): string {
-    if (this.started) return text;
-    const trimmed = text.replace(/^\s+/, '');
-    if (trimmed) this.started = true;
-    return trimmed;
+  private add(pieces: StreamPiece[], kind: StreamPiece['kind'], text: string) {
+    if (kind === 'text' && !this.started) {
+      text = text.replace(/^\s+/, '');
+      if (text) this.started = true;
+    }
+    if (text) pieces.push({ kind, text });
   }
 }
 
-function contentOf(data: unknown, key: 'delta' | 'message'): string {
-  const value = (data as { choices?: Array<Record<string, { content?: unknown } | undefined>> })?.choices?.[0]?.[
-    key
-  ]?.content;
-  return typeof value === 'string' ? value : '';
+type ChoicePart = { content?: unknown; reasoning_content?: unknown; reasoning?: unknown };
+
+/** 取出正式內容與思考內容；思考欄位各家叫法不同（reasoning_content、reasoning）。 */
+function partsOf(data: unknown, key: 'delta' | 'message'): { content: string; reasoning: string } {
+  const part = (data as { choices?: Array<Record<string, ChoicePart | undefined>> })?.choices?.[0]?.[key];
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  return { content: text(part?.content), reasoning: text(part?.reasoning_content) || text(part?.reasoning) };
 }
 
 /**
@@ -101,7 +141,7 @@ export async function openChatStream(
   messages: ChatMessage[],
   fetchImpl: AiFetch = fetch,
   options: { maxTokens?: number; temperature?: number } = {},
-): Promise<AsyncGenerator<string, void, undefined>> {
+): Promise<AsyncGenerator<StreamPiece, void, undefined>> {
   // 只有設定 AI_TIMEOUT_SECONDS 才主動逾時；計時涵蓋整個回覆（含串流）。
   const controller = new AbortController();
   const timer = config.timeoutMs === null ? null : setTimeout(() => controller.abort(), config.timeoutMs);
@@ -109,9 +149,14 @@ export async function openChatStream(
     if (timer) clearTimeout(timer);
   };
 
-  let response: Response;
-  try {
-    response = await fetchImpl(completionsUrl(config.baseUrl), {
+  const key = `${config.baseUrl}|${config.model}`;
+  const withNoThink = messages.map((message, index) =>
+    index === 0 && message.role === 'system'
+      ? { ...message, content: `${message.content}\n${NO_THINK_TAG}` }
+      : message,
+  );
+  const send = (hints: boolean) =>
+    fetchImpl(completionsUrl(config.baseUrl), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -119,14 +164,28 @@ export async function openChatStream(
         Authorization: `Bearer ${config.apiKey}`,
       },
       body: JSON.stringify({
+        // 順序：關推理參數 → 自訂參數（AI_EXTRA_BODY 可以改寫前者）→ 核心欄位（不會被蓋掉）。
+        ...(hints ? REASONING_OFF : {}),
+        ...config.extraBody,
         model: config.model,
-        messages,
+        messages: withNoThink,
         temperature: options.temperature ?? 0.3,
         max_tokens: Math.min(options.maxTokens ?? config.maxTokens, config.maxTokens),
         stream: config.stream,
       }),
       signal: controller.signal,
     });
+
+  let response: Response;
+  try {
+    const hints = !hintsRejected.has(key);
+    response = await send(hints);
+    if (hints && (response.status === 400 || response.status === 422)) {
+      const detail = await response.text().catch(() => '');
+      console.warn('[hush] ai endpoint rejected reasoning-off params, retrying without', detail.slice(0, 300));
+      hintsRejected.add(key);
+      response = await send(false);
+    }
   } catch (error) {
     stop();
     if (controller.signal.aborted) {
@@ -148,7 +207,7 @@ export async function openChatStream(
 
   const isEventStream = (response.headers.get('content-type') ?? '').includes('text/event-stream');
 
-  async function* generate(): AsyncGenerator<string, void, undefined> {
+  async function* generate(): AsyncGenerator<StreamPiece, void, undefined> {
     const filter = new ThinkFilter();
     try {
       // 關閉串流（AI_STREAM=false），或端點不支援串流而直接回 JSON：整段一次送出。
@@ -159,8 +218,10 @@ export async function openChatStream(
         } catch {
           throw new HttpError(502, 'ai_failed', 'AI 服務回傳的內容無法解析。');
         }
-        const text = filter.push(contentOf(data, 'message')) + filter.flush();
-        if (text) yield text;
+        const { content, reasoning } = partsOf(data, 'message');
+        if (reasoning) yield { kind: 'thinking', text: reasoning };
+        yield* filter.push(content);
+        yield* filter.flush();
         return;
       }
 
@@ -179,8 +240,7 @@ export async function openChatStream(
             const payload = line.slice(5).trim();
             if (!payload) continue;
             if (payload === '[DONE]') {
-              const rest = filter.flush();
-              if (rest) yield rest;
+              yield* filter.flush();
               return;
             }
             let data: unknown;
@@ -193,15 +253,15 @@ export async function openChatStream(
               console.error('[hush] ai stream error', payload.slice(0, 500));
               throw new HttpError(502, 'ai_failed', 'AI 服務在回覆途中出錯。');
             }
-            const text = filter.push(contentOf(data, 'delta'));
-            if (text) yield text;
+            const { content, reasoning } = partsOf(data, 'delta');
+            if (reasoning) yield { kind: 'thinking', text: reasoning };
+            if (content) yield* filter.push(content);
           }
         }
       } finally {
         reader.releaseLock();
       }
-      const rest = filter.flush();
-      if (rest) yield rest;
+      yield* filter.flush();
     } catch (error) {
       if (controller.signal.aborted) {
         throw new HttpError(504, 'ai_timeout', 'AI 回應逾時，回覆可能不完整。');

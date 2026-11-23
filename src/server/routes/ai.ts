@@ -5,7 +5,8 @@
  * - 每次呼叫記一筆稽核（不含內容），同時用來做每人每小時的次數限制。
  * - 個人問答的對話由前端保存，伺服器不落地。
  * - 回覆一律是 NDJSON 串流（application/x-ndjson），每行一個事件：
- *   {"type":"meta",…}（選用）→ {"type":"delta","text":"…"}… → {"type":"done"}；
+ *   {"type":"meta",…}（選用）→ {"type":"thinking","text":"…"}…（推理模型的思考，選用）
+ *   → {"type":"delta","text":"…"}… → {"type":"done"}；
  *   開始後才出錯則以 {"type":"error","code","message"} 結束。
  *   開始前的錯誤（設定、驗證、次數、上游 HTTP 錯誤、逾時）仍是一般 JSON 錯誤與狀態碼。
  */
@@ -83,7 +84,12 @@ async function streamReply(
           controller.close();
           return;
         }
-        let text = next.value;
+        if (next.value.kind === 'thinking') {
+          // 思考過程照樣即時送出：讓前端看得到進度，也讓連線不會長時間沒有資料。
+          controller.enqueue(line({ type: 'thinking', text: next.value.text }));
+          return;
+        }
+        let text = next.value.text;
         if (maxChars !== undefined && total + text.length > maxChars) text = text.slice(0, maxChars - total);
         total += text.length;
         if (text) controller.enqueue(line({ type: 'delta', text }));

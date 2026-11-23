@@ -20,6 +20,7 @@ export function AiAssistant({
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [sharing, setSharing] = useState<number | null>(null);
+  const [thinking, setThinking] = useState('');
   const bottom = useRef<HTMLDivElement>(null);
   const abort = useRef<AbortController | null>(null);
   const toast = useToast();
@@ -35,6 +36,7 @@ export function AiAssistant({
     setHistory(next);
     setDraft('');
     setBusy(true);
+    setThinking('');
     const controller = new AbortController();
     abort.current = controller;
     let partial = '';
@@ -42,6 +44,7 @@ export function AiAssistant({
       // 串流：邊收邊顯示。
       await api.aiChat(next, {
         signal: controller.signal,
+        onThinking: setThinking,
         onText: (text) => {
           partial = text;
           setHistory([...next, { role: 'assistant', content: text }]);
@@ -61,6 +64,7 @@ export function AiAssistant({
     } finally {
       abort.current = null;
       setBusy(false);
+      setThinking('');
     }
   };
 
@@ -125,6 +129,7 @@ export function AiAssistant({
           {busy && history[history.length - 1]?.role === 'user' ? (
             <div className="flex items-center gap-2 text-[12px] text-white/40">
               <Spinner size={13} /> 思考中…
+              {thinking ? <ThinkingTail text={thinking} /> : null}
             </div>
           ) : null}
           <div ref={bottom} />
@@ -169,14 +174,17 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
   const [limit, setLimit] = useState(100);
   const [summary, setSummary] = useState<{ text: string; count: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [thinking, setThinking] = useState('');
   const toast = useToast();
 
   const generate = async () => {
     setBusy(true);
     let count = 0;
     setSummary(null);
+    setThinking('');
     try {
       await api.aiSummarize(limit, {
+        onThinking: setThinking,
         onMeta: (meta) => {
           count = Number(meta.count ?? 0);
           setSummary({ text: '', count });
@@ -187,6 +195,7 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
       toast(caught instanceof Error ? caught.message : '摘要失敗。', 'error');
     } finally {
       setBusy(false);
+      setThinking('');
     }
   };
 
@@ -238,7 +247,13 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
           </button>
         ))}
       </div>
-      {summary ? (
+      {busy && !summary?.text ? (
+        <div className="flex items-center gap-2 text-[12px] text-white/40">
+          <Spinner size={13} /> 思考中…
+          {thinking ? <ThinkingTail text={thinking} /> : null}
+        </div>
+      ) : null}
+      {summary?.text ? (
         <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-xl border border-white/[0.06] bg-[#141722] p-3 text-[13.5px] leading-relaxed text-white/85">
           <p className="mb-2 text-[11px] text-white/35">根據 {summary.count} 則訊息</p>
           {summary.text}
@@ -246,4 +261,10 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
       ) : null}
     </Modal>
   );
+}
+
+/** 只顯示思考過程最後一小段，讓使用者知道模型還在動。 */
+function ThinkingTail({ text }: { text: string }) {
+  const tail = text.replace(/\s+/g, ' ').slice(-80);
+  return <span className="min-w-0 flex-1 truncate italic text-white/25">{tail}</span>;
 }
