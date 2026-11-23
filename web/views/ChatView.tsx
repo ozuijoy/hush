@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { api, downloadFile, uploadFile } from '../lib/api';
+import { AI_TRUNCATED_NOTICE, api, downloadFile, uploadFile } from '../lib/api';
 import { fileKind, formatBytes, formatDay, formatTime, isSameDay } from '../lib/format';
 import type { Message, User } from '../lib/types';
 import { useChat } from '../lib/useChat';
@@ -138,6 +138,7 @@ export function ChatView({
     let partial = '';
     try {
       await api.aiTranslate(message.id, {
+        onTruncated: () => toast(AI_TRUNCATED_NOTICE, 'error'),
         onText: (text) => {
           partial = text;
           setTranslations((all) => ({ ...all, [message.id]: { loading: true, text } }));
@@ -164,6 +165,7 @@ export function ChatView({
     try {
       // 串流：草稿邊收邊換。
       await api.aiPolish(text, {
+        onTruncated: () => toast(AI_TRUNCATED_NOTICE, 'error'),
         onText: (next) => {
           received = true;
           setDraft(next);

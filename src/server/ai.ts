@@ -59,8 +59,11 @@ function partialSuffix(s: string, tag: string): number {
 }
 
 export interface StreamPiece {
-  /** text：正式回覆；thinking：推理模型的思考過程（只給前端看進度，不算回覆內容）。 */
-  kind: 'text' | 'thinking';
+  /**
+   * text：正式回覆；thinking：推理模型的思考過程（只給前端看進度，不算回覆內容）；
+   * truncated：上游因長度上限停止（finish_reason=length），text 為空。
+   */
+  kind: 'text' | 'thinking' | 'truncated';
   text: string;
 }
 
@@ -124,6 +127,11 @@ export class ThinkFilter {
 type ChoicePart = { content?: unknown; reasoning_content?: unknown; reasoning?: unknown };
 
 /** 取出正式內容與思考內容；思考欄位各家叫法不同（reasoning_content、reasoning）。 */
+function finishReasonOf(data: unknown): string | undefined {
+  const reason = (data as { choices?: Array<{ finish_reason?: unknown }> })?.choices?.[0]?.finish_reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 function partsOf(data: unknown, key: 'delta' | 'message'): { content: string; reasoning: string } {
   const part = (data as { choices?: Array<Record<string, ChoicePart | undefined>> })?.choices?.[0]?.[key];
   const text = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -136,6 +144,12 @@ function partsOf(data: unknown, key: 'delta' | 'message'): { content: string; re
  * 連線失敗、HTTP 錯誤、逾時這類「開始前」的問題會直接丟 HttpError（路由回對應狀態碼）；
  * 開始串流之後的問題由迭代器丟出，路由改用串流裡的 error 事件告知前端。
  */
+/** 只有呼叫端或 AI_MAX_TOKENS 有指定上限時才送 max_tokens（取較小者）。 */
+function maxTokensField(requested: number | undefined, configured: number | null): { max_tokens?: number } {
+  const limits = [requested, configured ?? undefined].filter((n): n is number => typeof n === 'number' && n > 0);
+  return limits.length ? { max_tokens: Math.min(...limits) } : {};
+}
+
 export async function openChatStream(
   config: AiConfig,
   messages: ChatMessage[],
@@ -170,7 +184,7 @@ export async function openChatStream(
         model: config.model,
         messages: withNoThink,
         temperature: options.temperature ?? 0.3,
-        max_tokens: Math.min(options.maxTokens ?? config.maxTokens, config.maxTokens),
+        ...maxTokensField(options.maxTokens, config.maxTokens),
         stream: config.stream,
       }),
       signal: controller.signal,
@@ -222,12 +236,14 @@ export async function openChatStream(
         if (reasoning) yield { kind: 'thinking', text: reasoning };
         yield* filter.push(content);
         yield* filter.flush();
+        if (finishReasonOf(data) === 'length') yield { kind: 'truncated', text: '' };
         return;
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = '';
+      let truncated = false;
       try {
         for (;;) {
           const { value, done } = await reader.read();
@@ -241,6 +257,7 @@ export async function openChatStream(
             if (!payload) continue;
             if (payload === '[DONE]') {
               yield* filter.flush();
+              if (truncated) yield { kind: 'truncated', text: '' };
               return;
             }
             let data: unknown;
@@ -253,6 +270,7 @@ export async function openChatStream(
               console.error('[hush] ai stream error', payload.slice(0, 500));
               throw new HttpError(502, 'ai_failed', 'AI 服務在回覆途中出錯。');
             }
+            if (finishReasonOf(data) === 'length') truncated = true;
             const { content, reasoning } = partsOf(data, 'delta');
             if (reasoning) yield { kind: 'thinking', text: reasoning };
             if (content) yield* filter.push(content);
@@ -262,6 +280,7 @@ export async function openChatStream(
         reader.releaseLock();
       }
       yield* filter.flush();
+      if (truncated) yield { kind: 'truncated', text: '' };
     } catch (error) {
       if (controller.signal.aborted) {
         throw new HttpError(504, 'ai_timeout', 'AI 回應逾時，回覆可能不完整。');

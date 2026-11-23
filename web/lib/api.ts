@@ -80,6 +80,8 @@ export interface AiStreamHandlers {
   onMeta?: (meta: Record<string, unknown>) => void;
   /** 推理模型的思考過程（累積全文），只用來顯示進度。 */
   onThinking?: (thinking: string) => void;
+  /** 回覆因長度上限被截斷（模型的 max_tokens 或系統的字數上限）。 */
+  onTruncated?: () => void;
   signal?: AbortSignal;
 }
 
@@ -113,7 +115,7 @@ async function streamAi(path: string, payload: unknown, handlers: AiStreamHandle
   let finished = false;
   const handle = (line: string) => {
     if (!line.trim()) return;
-    const event = JSON.parse(line) as { type: string; text?: string; code?: string; message?: string };
+    const event = JSON.parse(line) as { type: string; text?: string; code?: string; message?: string; truncated?: boolean };
     if (event.type === 'meta') handlers.onMeta?.(event);
     else if (event.type === 'thinking' && event.text) {
       thinking += event.text;
@@ -122,7 +124,10 @@ async function streamAi(path: string, payload: unknown, handlers: AiStreamHandle
     else if (event.type === 'delta' && event.text) {
       text += event.text;
       handlers.onText?.(text);
-    } else if (event.type === 'done') finished = true;
+    } else if (event.type === 'done') {
+      finished = true;
+      if (event.truncated) handlers.onTruncated?.();
+    }
     else if (event.type === 'error') {
       throw new ApiError(502, event.code ?? 'ai_failed', event.message ?? 'AI 回覆中斷。');
     }
@@ -145,6 +150,9 @@ async function streamAi(path: string, payload: unknown, handlers: AiStreamHandle
   }
   return text;
 }
+
+/** 回覆被截斷時給使用者看的提示。 */
+export const AI_TRUNCATED_NOTICE = '回覆達到長度上限，後面被截斷了。';
 
 export const api = {
   me: () => request<SessionPayload>('/api/auth/me'),

@@ -25,7 +25,8 @@ export interface AiConfig {
   model: string;
   /** 未設定 AI_TIMEOUT_SECONDS 時為 null：不主動逾時，交給平台函式的執行上限。 */
   timeoutMs: number | null;
-  maxTokens: number;
+  /** 未設定 AI_MAX_TOKENS 時為 null：不送 max_tokens，回覆長度交給模型／供應商決定。 */
+  maxTokens: number | null;
   /** 每位成員每小時可用次數。 */
   hourlyLimit: number;
   /** 預設用串流；AI_STREAM=false 時改成一次回傳整段。 */
@@ -124,11 +125,16 @@ function loadAiConfig(env: Record<string, string | undefined>): AiConfig | null 
     apiKey,
     model,
     timeoutMs: env.AI_TIMEOUT_SECONDS?.trim() && Number.isFinite(timeout) && timeout > 0 ? Math.floor(timeout * 1000) : null,
-    maxTokens: Math.floor(positiveNumber(env.AI_MAX_TOKENS, 1024)),
+    maxTokens: optionalPositiveInt(env.AI_MAX_TOKENS),
     hourlyLimit: Math.floor(positiveNumber(env.AI_HOURLY_LIMIT, 30)),
     stream: !/^(false|0|no|off)$/i.test(env.AI_STREAM?.trim() ?? ''),
     extraBody: parseExtraBody(env.AI_EXTRA_BODY),
   };
+}
+
+function optionalPositiveInt(raw: string | undefined): number | null {
+  const value = Number(raw?.trim());
+  return raw?.trim() && Number.isFinite(value) && value >= 1 ? Math.floor(value) : null;
 }
 
 function parseExtraBody(raw: string | undefined): Record<string, unknown> {

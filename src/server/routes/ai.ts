@@ -6,6 +6,7 @@
  * - 個人問答的對話由前端保存，伺服器不落地。
  * - 回覆一律是 NDJSON 串流（application/x-ndjson），每行一個事件：
  *   {"type":"meta",…}（選用）→ {"type":"thinking","text":"…"}…（推理模型的思考，選用）
+ *   done 帶 truncated: true 表示回覆因長度上限被截斷
  *   → {"type":"delta","text":"…"}… → {"type":"done"}；
  *   開始後才出錯則以 {"type":"error","code","message"} 結束。
  *   開始前的錯誤（設定、驗證、次數、上游 HTTP 錯誤、逾時）仍是一般 JSON 錯誤與狀態碼。
@@ -68,9 +69,12 @@ async function streamReply(
   const line = (event: Record<string, unknown>) => encoder.encode(`${JSON.stringify(event)}\n`);
   let total = 0;
   let started = false;
+  let truncated = false;
+  const done = () => line(truncated ? { type: 'done', truncated: true } : { type: 'done' });
 
   const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
+    // pull 每次都必須送出資料或結束，否則串流會停住；所以沒東西可送的片段（截斷標記）在這裡直接讀下一段。
+    async pull(controller): Promise<void> {
       try {
         if (!started) {
           started = true;
@@ -79,10 +83,14 @@ async function streamReply(
         const next = await chunks.next();
         if (next.done) {
           controller.enqueue(
-            line(total ? { type: 'done' } : { type: 'error', code: 'ai_empty', message: 'AI 沒有回覆內容。' }),
+            total ? done() : line({ type: 'error', code: 'ai_empty', message: 'AI 沒有回覆內容。' }),
           );
           controller.close();
           return;
+        }
+        if (next.value.kind === 'truncated') {
+          truncated = true;
+          return this.pull!(controller);
         }
         if (next.value.kind === 'thinking') {
           // 思考過程照樣即時送出：讓前端看得到進度，也讓連線不會長時間沒有資料。
@@ -95,7 +103,8 @@ async function streamReply(
         if (text) controller.enqueue(line({ type: 'delta', text }));
         if (maxChars !== undefined && total >= maxChars) {
           await chunks.return(undefined);
-          controller.enqueue(line({ type: 'done' }));
+          truncated = true;
+          controller.enqueue(done());
           controller.close();
         }
       } catch (error) {

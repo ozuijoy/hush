@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { api, type AiChatMessage } from '../lib/api';
+import { AI_TRUNCATED_NOTICE, api, type AiChatMessage } from '../lib/api';
 import { SendIcon, SparklesIcon } from './Icons';
 import { Button, Modal, Spinner, cx } from './ui';
 import { useToast } from './Toast';
@@ -45,6 +45,7 @@ export function AiAssistant({
       await api.aiChat(next, {
         signal: controller.signal,
         onThinking: setThinking,
+        onTruncated: () => toast(AI_TRUNCATED_NOTICE, 'error'),
         onText: (text) => {
           partial = text;
           setHistory([...next, { role: 'assistant', content: text }]);
@@ -185,6 +186,7 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
     try {
       await api.aiSummarize(limit, {
         onThinking: setThinking,
+        onTruncated: () => toast(AI_TRUNCATED_NOTICE, 'error'),
         onMeta: (meta) => {
           count = Number(meta.count ?? 0);
           setSummary({ text: '', count });

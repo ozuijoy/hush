@@ -120,7 +120,7 @@ AI_BASE_URL=https://api.example.com/v1   # 填到 /v1，或直接填完整的 ..
 AI_API_KEY=...                           # 必填，以 Authorization: Bearer 送出
 AI_MODEL=your-model-name
 # AI_TIMEOUT_SECONDS=     # 不設就不主動逾時（仍受部署平台的函式執行上限）
-# AI_MAX_TOKENS=1024
+# AI_MAX_TOKENS=2000        # 不設就不限制（不送 max_tokens，由模型決定）
 # AI_HOURLY_LIMIT=30      # 每人每小時次數
 # AI_STREAM=false         # 預設串流；端點不支援時設 false 改成一次回整段
 # AI_EXTRA_BODY={"top_p":0.9}   # 額外併入請求的 JSON 物件（可改寫關閉推理的參數，改不了 model／messages／stream）
@@ -143,7 +143,7 @@ AI_MODEL=your-model-name
 | `APP_NAME` | | 品牌名稱（預設 Hush） |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | AI 功能必填 | 任何 OpenAI 相容端點、金鑰（以 `Authorization: Bearer` 送出）、模型名稱；三個都有才啟用 |
 | `AI_TIMEOUT_SECONDS` | | 主動逾時秒數；不設就不逾時（仍受平台函式執行上限） |
-| `AI_MAX_TOKENS` / `AI_HOURLY_LIMIT` | | 回覆長度上限（預設 1024）、每人每小時次數（預設 30） |
+| `AI_MAX_TOKENS` / `AI_HOURLY_LIMIT` | | 回覆長度上限（未設定就不送 max_tokens，交給模型決定；回覆因上限被截斷時前端會提示）、每人每小時次數（預設 30） |
 | `AI_STREAM` | | 預設串流；設 `false` 改成一次回整段（端點直接回 JSON 時也會自動處理） |
 | `AI_EXTRA_BODY` | | 額外併入請求的 JSON 物件（各家自己的參數）；可改寫關閉推理的預設值，不能改 model／messages／stream |
 
@@ -178,9 +178,9 @@ npm run check   # typecheck + 全部測試 + production build
 - `tests/preview.test.ts`：可預覽類型判斷（圖片、音訊、影片、PDF、文字；SVG/HTML 只以純文字顯示），以及 S3 預覽網址（inline、覆寫 Content-Type、效期 1 小時）。
 - `tests/api.test.ts`：以 PGlite 跑 26 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、置頂（權限、取代、輪詢同步、刪除時取消）、搜尋（中英文、檔名、篩選、萬用字元跳脫）與前後文、訊息刪除墓碑、檔案上傳下載與大小檢查、上傳必須附描述（空白、過長都拒絕，描述進檔案庫與訊息內文）、檔案預覽（inline 白名單、HTML 不以 text/html 回傳）、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
 - `tests/media.test.ts`：外鏈媒體代理（含 4 MB 上限檢查）——內部位址判斷（IPv4／IPv6／內嵌 IPv4）、網址格式、內文網址切割，以及端到端：未登入 401、圖片轉送與快取標頭、info 回報大小（超過 4 MB 不可預覽、HEAD 不支援時改用 GET）、413／415、DNS 指向私有位址與轉址到內部都擋下、公開轉址會跟隨。
-- `tests/ai.test.ts`：AI 功能 16 項（假的 OpenAI 相容端點與 SSE 串流）——端點、金鑰、模型缺一就關閉，逾時不預設，預設串流，預設關閉推理（參數與 /no_think、400 時拿掉重送並記住）、思考內容另以 thinking 事件送出、AI_EXTRA_BODY 合併規則（503、aiEnabled=false）、端點網址組合、未登入 401、問答送出的網址／金鑰／模型與 stream、去除被切開的思考標籤、拒絕 system 角色與格式錯誤、摘要、翻譯（指定語言；無效或不存在的訊息編號被拒）、潤稿（超過長度截斷）、AI_STREAM=false 與端點直接回 JSON、上游錯誤不外洩內容（500／429／空回覆／串流中途出錯／逾時）、每人每小時次數上限與稽核不記內容。
+- `tests/ai.test.ts`：AI 功能 17 項（假的 OpenAI 相容端點與 SSE 串流）——端點、金鑰、模型缺一就關閉（503、aiEnabled=false），逾時不預設，預設串流，預設關閉推理（參數與 /no_think、400 時拿掉重送並記住）、思考內容另以 thinking 事件送出、AI_EXTRA_BODY 合併規則、未設 AI_MAX_TOKENS 不送 max_tokens、finish_reason=length 時標記截斷、端點網址組合、未登入 401、問答送出的網址／金鑰／模型與 stream、去除被切開的思考標籤、拒絕 system 角色與格式錯誤、摘要、翻譯（指定語言；無效或不存在的訊息編號被拒）、潤稿（超過長度截斷）、AI_STREAM=false 與端點直接回 JSON、上游錯誤不外洩內容（500／429／空回覆／串流中途出錯／逾時）、每人每小時次數上限與稽核不記內容。
 
-共 64 項。
+共 65 項。
 
 ## 結構
 

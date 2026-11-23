@@ -50,6 +50,7 @@ type StreamResult = {
   text: string;
   thinking: string;
   done: boolean;
+  truncated?: boolean;
   error?: { code: string; message: string };
 };
 
@@ -61,7 +62,10 @@ async function readStream(res: Response): Promise<StreamResult> {
     if (event.type === 'meta') result.meta = event;
     else if (event.type === 'delta') result.text += event.text;
     else if (event.type === 'thinking') result.thinking += event.text;
-    else if (event.type === 'done') result.done = true;
+    else if (event.type === 'done') {
+      result.done = true;
+      if (event.truncated) result.truncated = true;
+    }
     else if (event.type === 'error') result.error = { code: event.code, message: event.message };
   }
   return result;
@@ -304,7 +308,35 @@ describe('AI 功能', () => {
     reply = () => sse(['字'.repeat(3000), '字'.repeat(3000)]);
     const long = await readStream(await call('/api/ai/polish', { text: 'hi' }));
     expect(long.text.length).toBe(4000);
-    expect(long.done).toBe(true);
+    expect(long).toMatchObject({ done: true, truncated: true });
+    reply = defaultReply;
+  });
+
+  it('回覆長度：未設 AI_MAX_TOKENS 不送 max_tokens；上游因長度停止時 done 帶 truncated', async () => {
+    captured.length = 0;
+    const normal = await readStream(await call('/api/ai/polish', { text: 'hi' }));
+    expect('max_tokens' in captured[0].body).toBe(false);
+    expect(normal.truncated).toBeUndefined();
+    expect(loadConfig({ ...baseEnv, ...aiEnv }).ai?.maxTokens).toBeNull();
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_MAX_TOKENS: 'abc' }).ai?.maxTokens).toBeNull();
+
+    const limited = makeApp({ ...aiEnv, AI_MAX_TOKENS: '500' });
+    captured.length = 0;
+    await readStream(await call('/api/ai/polish', { text: 'hi' }, limited));
+    expect(captured[0].body.max_tokens).toBe(500);
+
+    reply = () =>
+      sse(['寫到一半'], {
+        extra: [`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })}\n\n`],
+      });
+    const cut = await readStream(await call('/api/ai/chat', { messages: [{ role: 'user', content: '長文' }] }));
+    expect(cut).toMatchObject({ text: '寫到一半', done: true, truncated: true });
+
+    // 不串流（整段 JSON）也一樣判斷。
+    reply = () =>
+      Response.json({ choices: [{ message: { content: '半句' }, finish_reason: 'length' }] });
+    const cutJson = await readStream(await call('/api/ai/chat', { messages: [{ role: 'user', content: '長文' }] }));
+    expect(cutJson).toMatchObject({ text: '半句', done: true, truncated: true });
     reply = defaultReply;
   });
 
