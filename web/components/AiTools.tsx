@@ -21,11 +21,12 @@ export function AiAssistant({
   const [busy, setBusy] = useState(false);
   const [sharing, setSharing] = useState<number | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  const abort = useRef<AbortController | null>(null);
   const toast = useToast();
 
   useEffect(() => {
     if (open) bottom.current?.scrollIntoView({ block: 'end' });
-  }, [open, history.length, busy]);
+  }, [open, history, busy]);
 
   const ask = async () => {
     const question = draft.trim();
@@ -34,14 +35,31 @@ export function AiAssistant({
     setHistory(next);
     setDraft('');
     setBusy(true);
+    const controller = new AbortController();
+    abort.current = controller;
+    let partial = '';
     try {
-      const { answer } = await api.aiChat(next);
-      setHistory([...next, { role: 'assistant', content: answer }]);
+      // 串流：邊收邊顯示。
+      await api.aiChat(next, {
+        signal: controller.signal,
+        onText: (text) => {
+          partial = text;
+          setHistory([...next, { role: 'assistant', content: text }]);
+        },
+      });
     } catch (caught) {
-      setHistory(history);
-      setDraft(question);
-      toast(caught instanceof Error ? caught.message : 'AI 暫時無法回答。', 'error');
+      if (partial) {
+        // 已經收到一部分就保留，讓使用者自己判斷。
+        setHistory([...next, { role: 'assistant', content: `${partial}…` }]);
+      } else {
+        setHistory(history);
+        setDraft(question);
+      }
+      if (!controller.signal.aborted) {
+        toast(caught instanceof Error ? caught.message : 'AI 暫時無法回答。', 'error');
+      }
     } finally {
+      abort.current = null;
       setBusy(false);
     }
   };
@@ -92,7 +110,7 @@ export function AiAssistant({
               >
                 {item.content}
               </div>
-              {item.role === 'assistant' ? (
+              {item.role === 'assistant' && !(busy && index === history.length - 1) ? (
                 <button
                   type="button"
                   onClick={() => void share(index)}
@@ -104,7 +122,7 @@ export function AiAssistant({
               ) : null}
             </div>
           ))}
-          {busy ? (
+          {busy && history[history.length - 1]?.role === 'user' ? (
             <div className="flex items-center gap-2 text-[12px] text-white/40">
               <Spinner size={13} /> 思考中…
             </div>
@@ -121,9 +139,15 @@ export function AiAssistant({
             placeholder="輸入問題…（Enter 送出）"
             className="field flex-1 resize-none py-2 text-[13.5px]"
           />
-          <Button className="h-10 w-10 shrink-0 p-0" onClick={() => void ask()} loading={busy} disabled={!draft.trim()} aria-label="送出問題">
-            {busy ? null : <SendIcon size={16} />}
-          </Button>
+          {busy ? (
+            <Button variant="ghost" className="h-10 shrink-0 px-3" onClick={() => abort.current?.abort()}>
+              停止
+            </Button>
+          ) : (
+            <Button className="h-10 w-10 shrink-0 p-0" onClick={() => void ask()} disabled={!draft.trim()} aria-label="送出問題">
+              <SendIcon size={16} />
+            </Button>
+          )}
         </div>
         {history.length > 0 ? (
           <button
@@ -149,9 +173,16 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
 
   const generate = async () => {
     setBusy(true);
+    let count = 0;
+    setSummary(null);
     try {
-      const result = await api.aiSummarize(limit);
-      setSummary({ text: result.summary, count: result.count });
+      await api.aiSummarize(limit, {
+        onMeta: (meta) => {
+          count = Number(meta.count ?? 0);
+          setSummary({ text: '', count });
+        },
+        onText: (text) => setSummary({ text, count }),
+      });
     } catch (caught) {
       toast(caught instanceof Error ? caught.message : '摘要失敗。', 'error');
     } finally {
@@ -177,7 +208,7 @@ export function AiSummary({ open, onClose }: { open: boolean; onClose: () => voi
       description="整理最近訊息的重點、決定與待辦。訊息內容會送到管理員設定的 AI 服務。"
       footer={
         <>
-          {summary ? (
+          {summary?.text && !busy ? (
             <Button variant="ghost" onClick={() => void copy()}>
               複製
             </Button>

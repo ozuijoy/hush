@@ -23,8 +23,42 @@ type Captured = { url: string; headers: Record<string, string>; body: Record<str
 
 let sql: Sql;
 const captured: Captured[] = [];
-let reply: () => Response | Promise<Response> = () =>
-  Response.json({ choices: [{ message: { role: 'assistant', content: '<think>想一下</think>這是回答' } }] });
+/** 模擬 OpenAI 相容的 SSE 串流；片段刻意把 <think> 標籤與多位元組字元切開。 */
+function sse(pieces: string[], { done = true, extra = [] as string[] } = {}): Response {
+  const encoder = new TextEncoder();
+  const events = [
+    ...pieces.map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`),
+    ...extra,
+    ...(done ? ['data: [DONE]\n\n'] : []),
+  ];
+  const bytes = encoder.encode(events.join(''));
+  // 以 7 bytes 為單位送出，確保行與 UTF-8 字元都會被切斷。
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+      controller.close();
+    },
+  });
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}
+
+const defaultReply = () => sse(['<thi', 'nk>想一下</th', 'ink>\n\n這是', '回答']);
+let reply: () => Response | Promise<Response> = defaultReply;
+
+type StreamResult = { meta?: Record<string, unknown>; text: string; done: boolean; error?: { code: string; message: string } };
+
+async function readStream(res: Response): Promise<StreamResult> {
+  expect(res.headers.get('content-type')).toContain('application/x-ndjson');
+  const result: StreamResult = { text: '', done: false };
+  for (const line of (await res.text()).split('\n').filter(Boolean)) {
+    const event = JSON.parse(line);
+    if (event.type === 'meta') result.meta = event;
+    else if (event.type === 'delta') result.text += event.text;
+    else if (event.type === 'done') result.done = true;
+    else if (event.type === 'error') result.error = { code: event.code, message: event.message };
+  }
+  return result;
+}
 
 async function fakeFetch(url: string, init: RequestInit): Promise<Response> {
   captured.push({
@@ -91,7 +125,9 @@ describe('AI 設定', () => {
       apiKey: 'test-key',
       model: 'test-model',
       hourlyLimit: 30,
+      stream: true,
     });
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_STREAM: 'false' }).ai?.stream).toBe(false);
   });
 
   it('逾時不預設：沒設定 AI_TIMEOUT_SECONDS 就不主動中斷', () => {
@@ -127,7 +163,7 @@ describe('AI 設定', () => {
 });
 
 describe('AI 功能', () => {
-  it('問答：送到自訂端點、帶金鑰與模型，去掉思考過程', async () => {
+  it('問答：預設串流到自訂端點、帶金鑰與模型，去掉切開的思考過程', async () => {
     captured.length = 0;
     const res = await call('/api/ai/chat', {
       messages: [
@@ -137,11 +173,12 @@ describe('AI 功能', () => {
       ],
     });
     expect(res.status).toBe(200);
-    expect((await res.json()).answer).toBe('這是回答');
+    const result = await readStream(res);
+    expect(result).toMatchObject({ text: '這是回答', done: true });
     expect(captured[0].url).toBe('https://ai.example.test/v1/chat/completions');
     expect(captured[0].headers.Authorization).toBe('Bearer test-key');
     expect(captured[0].body.model).toBe('test-model');
-    expect(captured[0].body.stream).toBe(false);
+    expect(captured[0].body.stream).toBe(true);
     const sent = captured[0].body.messages;
     expect(sent[0].role).toBe('system');
     expect(sent.slice(1).map((m: { content: string }) => m.content)).toEqual(['第一題', '答一', '台北今天適合帶傘嗎？']);
@@ -158,25 +195,23 @@ describe('AI 功能', () => {
     }
   });
 
-  it('摘要：把最近訊息交給模型', async () => {
+  it('摘要：把最近訊息交給模型，meta 帶則數', async () => {
     captured.length = 0;
-    const res = await call('/api/ai/summarize', { limit: 50 });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.summary).toBe('這是回答');
-    expect(body.count).toBe(3);
+    const result = await readStream(await call('/api/ai/summarize', { limit: 50 }));
+    expect(result.meta?.count).toBe(3);
+    expect(result.text).toBe('這是回答');
     const prompt = captured[0].body.messages[1].content as string;
     expect(prompt).toContain('明天下午三點開會');
     expect(prompt).toContain('Please review the draft by Friday');
   });
 
-  it('翻譯：指定訊息與目標語言；刪除的訊息不能翻', async () => {
+  it('翻譯：指定訊息與目標語言；無效或不存在的編號被拒', async () => {
     const list = await (await call('/api/messages?limit=10')).json();
     const target = list.messages.find((m: { body: string }) => m.body?.startsWith('Please'));
     captured.length = 0;
-    const res = await call('/api/ai/translate', { messageId: target.id, target: '日文' });
-    expect(res.status).toBe(200);
-    expect((await res.json()).target).toBe('日文');
+    const result = await readStream(await call('/api/ai/translate', { messageId: target.id, target: '日文' }));
+    expect(result.meta?.target).toBe('日文');
+    expect(result.done).toBe(true);
     expect(captured[0].body.messages[0].content).toContain('日文');
     expect(captured[0].body.messages[1].content).toBe('Please review the draft by Friday');
 
@@ -184,16 +219,34 @@ describe('AI 功能', () => {
     expect((await call('/api/ai/translate', { messageId: '999999' })).status).toBe(404);
   });
 
-  it('潤稿：未知風格退回預設', async () => {
-    const res = await call('/api/ai/polish', { text: '我明天會晚點到', style: 'hack' });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.style).toBe('polish');
-    expect(body.text).toBe('這是回答');
+  it('潤稿：未知風格退回預設；超過訊息長度上限會截斷', async () => {
+    const result = await readStream(await call('/api/ai/polish', { text: '我明天會晚點到', style: 'hack' }));
+    expect(result.meta?.style).toBe('polish');
+    expect(result.text).toBe('這是回答');
     expect((await call('/api/ai/polish', { text: '' })).status).toBe(400);
+
+    reply = () => sse(['字'.repeat(3000), '字'.repeat(3000)]);
+    const long = await readStream(await call('/api/ai/polish', { text: 'hi' }));
+    expect(long.text.length).toBe(4000);
+    expect(long.done).toBe(true);
+    reply = defaultReply;
   });
 
-  it('上游錯誤不外洩內容；429 與逾時有各自的錯誤碼', async () => {
+  it('AI_STREAM=false 或端點不支援串流：一次回整段，前端格式不變', async () => {
+    captured.length = 0;
+    reply = () => Response.json({ choices: [{ message: { content: '<think>x</think> 整段回答' } }] });
+    const off = makeApp({ ...aiEnv, AI_STREAM: 'false' });
+    const result = await readStream(await call('/api/ai/polish', { text: 'hi' }, off));
+    expect(captured[0].body.stream).toBe(false);
+    expect(result).toMatchObject({ text: '整段回答', done: true });
+
+    // 有開串流，但端點直接回 JSON。
+    const fallback = await readStream(await call('/api/ai/polish', { text: 'hi' }));
+    expect(fallback.text).toBe('整段回答');
+    reply = defaultReply;
+  });
+
+  it('上游錯誤不外洩內容；429、逾時、空回覆、串流中途出錯各有錯誤碼', async () => {
     reply = () => new Response('secret upstream detail', { status: 500 });
     let res = await call('/api/ai/polish', { text: 'hi' });
     expect(res.status).toBe(502);
@@ -204,9 +257,15 @@ describe('AI 功能', () => {
     expect(res.status).toBe(429);
     expect((await res.json()).error.code).toBe('ai_rate_limited');
 
-    reply = () => Response.json({ choices: [{ message: { content: '' } }] });
-    res = await call('/api/ai/polish', { text: 'hi' });
-    expect((await res.json()).error.code).toBe('ai_empty');
+    reply = () => sse(['<think>只有思考</think>', '  ']);
+    expect((await readStream(await call('/api/ai/polish', { text: 'hi' }))).error?.code).toBe('ai_empty');
+
+    reply = () => sse(['前半段'], { done: false, extra: ['data: {"error":{"message":"secret mid-stream"}}\n\n'] });
+    const broken = await readStream(await call('/api/ai/polish', { text: 'hi' }));
+    expect(broken.text).toBe('前半段');
+    expect(broken.done).toBe(false);
+    expect(broken.error?.code).toBe('ai_failed');
+    expect(JSON.stringify(broken)).not.toContain('secret mid-stream');
 
     // 逾時：上游一直不回，AbortController 觸發後回 504。
     const abortable = createApp({
@@ -220,7 +279,7 @@ describe('AI 功能', () => {
     res = await call('/api/ai/polish', { text: 'hi' }, abortable);
     expect(res.status).toBe(504);
     expect((await res.json()).error.code).toBe('ai_timeout');
-    reply = () => Response.json({ choices: [{ message: { content: '這是回答' } }] });
+    reply = defaultReply;
   });
 
   it('每人每小時次數上限，並記在稽核紀錄', async () => {

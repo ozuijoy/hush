@@ -74,6 +74,65 @@ export interface AiChatMessage {
   content: string;
 }
 
+export interface AiStreamHandlers {
+  /** 每收到一段就呼叫，參數是目前累積的全文。 */
+  onText?: (text: string) => void;
+  onMeta?: (meta: Record<string, unknown>) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * AI 回覆是 NDJSON 串流：meta → delta… → done，中途出錯以 error 結束。
+ * 回傳完整文字；中途出錯時丟 ApiError（已收到的部分已經透過 onText 給出去）。
+ */
+async function streamAi(path: string, payload: unknown, handlers: AiStreamHandlers = {}): Promise<string> {
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: handlers.signal,
+  });
+  if (!response.ok || !response.body) {
+    let error: { code?: string; message?: string } | undefined;
+    try {
+      error = ((await response.json()) as { error?: { code?: string; message?: string } }).error;
+    } catch {
+      error = undefined;
+    }
+    throw new ApiError(response.status, error?.code ?? 'request_failed', error?.message ?? `請求失敗（HTTP ${response.status}）`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  let text = '';
+  let finished = false;
+  const handle = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as { type: string; text?: string; code?: string; message?: string };
+    if (event.type === 'meta') handlers.onMeta?.(event);
+    else if (event.type === 'delta' && event.text) {
+      text += event.text;
+      handlers.onText?.(text);
+    } else if (event.type === 'done') finished = true;
+    else if (event.type === 'error') {
+      throw new ApiError(502, event.code ?? 'ai_failed', event.message ?? 'AI 回覆中斷。');
+    }
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    pending += decoder.decode(value, { stream: true });
+    const lines = pending.split('\n');
+    pending = lines.pop() ?? '';
+    lines.forEach(handle);
+  }
+  handle(pending + decoder.decode());
+  if (!finished) throw new ApiError(502, 'ai_incomplete', 'AI 回覆中斷，內容可能不完整。');
+  return text;
+}
+
 export const api = {
   me: () => request<SessionPayload>('/api/auth/me'),
   login: (username: string, password: string) =>
@@ -140,17 +199,13 @@ export const api = {
   removeMember: (id: string) =>
     request<{ ok: true; id: string }>(`/api/members/${id}`, { method: 'DELETE' }),
 
-  aiSummarize: (limit = 100) =>
-    request<{ summary: string; count: number }>('/api/ai/summarize', { method: 'POST', body: body({ limit }) }),
-  aiTranslate: (messageId: string, target?: string) =>
-    request<{ translation: string; target: string }>('/api/ai/translate', {
-      method: 'POST',
-      body: body({ messageId, target }),
-    }),
-  aiPolish: (text: string, style: AiPolishStyle = 'polish') =>
-    request<{ text: string; style: AiPolishStyle }>('/api/ai/polish', { method: 'POST', body: body({ text, style }) }),
-  aiChat: (messages: AiChatMessage[]) =>
-    request<{ answer: string }>('/api/ai/chat', { method: 'POST', body: body({ messages }) }),
+  aiSummarize: (limit: number, handlers: AiStreamHandlers) => streamAi('/api/ai/summarize', { limit }, handlers),
+  aiTranslate: (messageId: string, handlers: AiStreamHandlers, target?: string) =>
+    streamAi('/api/ai/translate', { messageId, target }, handlers),
+  aiPolish: (text: string, handlers: AiStreamHandlers, style: AiPolishStyle = 'polish') =>
+    streamAi('/api/ai/polish', { text, style }, handlers),
+  aiChat: (messages: AiChatMessage[], handlers: AiStreamHandlers) =>
+    streamAi('/api/ai/chat', { messages }, handlers),
 
   overview: () => request<Overview>('/api/admin/overview'),
   audit: () => request<{ entries: AuditEntry[] }>('/api/admin/audit'),

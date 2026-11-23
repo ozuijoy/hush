@@ -28,6 +28,8 @@ export interface AiConfig {
   maxTokens: number;
   /** 每位成員每小時可用次數。 */
   hourlyLimit: number;
+  /** 預設用串流；AI_STREAM=false 時改成一次回傳整段。 */
+  stream: boolean;
 }
 
 export interface Config {
@@ -119,6 +121,7 @@ function loadAiConfig(env: Record<string, string | undefined>): AiConfig | null 
     timeoutMs: env.AI_TIMEOUT_SECONDS?.trim() && Number.isFinite(timeout) && timeout > 0 ? Math.floor(timeout * 1000) : null,
     maxTokens: Math.floor(positiveNumber(env.AI_MAX_TOKENS, 1024)),
     hourlyLimit: Math.floor(positiveNumber(env.AI_HOURLY_LIMIT, 30)),
+    stream: !/^(false|0|no|off)$/i.test(env.AI_STREAM?.trim() ?? ''),
   };
 }
 

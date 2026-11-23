@@ -128,18 +128,28 @@ export function ChatView({
 
   const translate = async (message: Message) => {
     const current = translations[message.id];
+    if (current?.loading) return;
     if (current?.text) {
       // 再按一次收起譯文。
       setTranslations(({ [message.id]: _removed, ...rest }) => rest);
       return;
     }
-    if (current?.loading) return;
     setTranslations((all) => ({ ...all, [message.id]: { loading: true } }));
+    let partial = '';
     try {
-      const { translation } = await api.aiTranslate(message.id);
-      setTranslations((all) => ({ ...all, [message.id]: { loading: false, text: translation } }));
+      await api.aiTranslate(message.id, {
+        onText: (text) => {
+          partial = text;
+          setTranslations((all) => ({ ...all, [message.id]: { loading: true, text } }));
+        },
+      });
+      setTranslations((all) => ({ ...all, [message.id]: { loading: false, text: partial } }));
     } catch (caught) {
-      setTranslations(({ [message.id]: _removed, ...rest }) => rest);
+      if (partial) {
+        setTranslations((all) => ({ ...all, [message.id]: { loading: false, text: `${partial}…` } }));
+      } else {
+        setTranslations(({ [message.id]: _removed, ...rest }) => rest);
+      }
       toast(caught instanceof Error ? caught.message : '翻譯失敗。', 'error');
     }
   };
@@ -147,12 +157,22 @@ export function ChatView({
   const polish = async () => {
     const text = draft.trim();
     if (!text || polishing) return;
+    const original = draft;
     setPolishing(true);
+    setBeforePolish(original);
+    let received = false;
     try {
-      const result = await api.aiPolish(text);
-      setBeforePolish(draft);
-      setDraft(result.text);
+      // 串流：草稿邊收邊換。
+      await api.aiPolish(text, {
+        onText: (next) => {
+          received = true;
+          setDraft(next);
+        },
+      });
     } catch (caught) {
+      // 失敗就還原原稿，避免留下半截。
+      if (received) setDraft(original);
+      setBeforePolish(null);
       toast(caught instanceof Error ? caught.message : '潤稿失敗。', 'error');
     } finally {
       setPolishing(false);
@@ -539,6 +559,7 @@ export function ChatView({
             <textarea
               ref={textarea}
               value={draft}
+              readOnly={polishing}
               onChange={(event) => {
                 setDraft(event.target.value);
                 setBeforePolish(null);

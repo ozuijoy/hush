@@ -4,9 +4,13 @@
  * - 只有設定 AI_BASE_URL 與 AI_MODEL 時才開放，否則回 503。
  * - 每次呼叫記一筆稽核（不含內容），同時用來做每人每小時的次數限制。
  * - 個人問答的對話由前端保存，伺服器不落地。
+ * - 回覆一律是 NDJSON 串流（application/x-ndjson），每行一個事件：
+ *   {"type":"meta",…}（選用）→ {"type":"delta","text":"…"}… → {"type":"done"}；
+ *   開始後才出錯則以 {"type":"error","code","message"} 結束。
+ *   開始前的錯誤（設定、驗證、次數、上游 HTTP 錯誤、逾時）仍是一般 JSON 錯誤與狀態碼。
  */
 import { Hono } from 'hono';
-import { chatComplete, type ChatMessage } from '../ai';
+import { openChatStream, type ChatMessage } from '../ai';
 import { recordAudit } from '../audit';
 import { requireAuth } from '../auth';
 import type { AppBindings, AppContext } from '../context';
@@ -47,8 +51,72 @@ async function useQuota(c: AppContext, ai: AiConfig, action: string) {
   await recordAudit(db, { id: user.id, name: user.displayName }, action, undefined, { model: ai.model });
 }
 
-function run(c: AppContext, ai: AiConfig, messages: ChatMessage[], options?: { maxTokens?: number; temperature?: number }) {
-  return chatComplete(ai, messages, c.get('aiFetch'), options);
+async function streamReply(
+  c: AppContext,
+  ai: AiConfig,
+  messages: ChatMessage[],
+  {
+    meta,
+    maxChars,
+    temperature,
+  }: { meta?: Record<string, unknown>; maxChars?: number; temperature?: number } = {},
+): Promise<Response> {
+  // 先等上游回應成功才開始串流，這樣上游的 HTTP 錯誤仍能用正確的狀態碼回給前端。
+  const chunks = await openChatStream(ai, messages, c.get('aiFetch'), { temperature });
+  const encoder = new TextEncoder();
+  const line = (event: Record<string, unknown>) => encoder.encode(`${JSON.stringify(event)}\n`);
+  let total = 0;
+  let started = false;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (!started) {
+          started = true;
+          if (meta) controller.enqueue(line({ type: 'meta', ...meta }));
+        }
+        const next = await chunks.next();
+        if (next.done) {
+          controller.enqueue(
+            line(total ? { type: 'done' } : { type: 'error', code: 'ai_empty', message: 'AI 沒有回覆內容。' }),
+          );
+          controller.close();
+          return;
+        }
+        let text = next.value;
+        if (maxChars !== undefined && total + text.length > maxChars) text = text.slice(0, maxChars - total);
+        total += text.length;
+        if (text) controller.enqueue(line({ type: 'delta', text }));
+        if (maxChars !== undefined && total >= maxChars) {
+          await chunks.return(undefined);
+          controller.enqueue(line({ type: 'done' }));
+          controller.close();
+        }
+      } catch (error) {
+        const known = error instanceof HttpError;
+        if (!known) console.error('[hush] ai stream failed', error);
+        controller.enqueue(
+          line({
+            type: 'error',
+            code: known ? error.code : 'ai_failed',
+            message: known ? error.message : 'AI 回覆中斷。',
+          }),
+        );
+        controller.close();
+      }
+    },
+    async cancel() {
+      await chunks.return(undefined);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }
 
 aiRoutes.post('/summarize', async (c) => {
@@ -76,14 +144,13 @@ aiRoutes.post('/summarize', async (c) => {
   }
 
   await useQuota(c, ai, 'ai.summarize');
-  const summary = await run(c, ai, [
+  return streamReply(c, ai, [
     {
       role: 'system',
       content: `你是群組聊天的摘要助手。用繁體中文、條列式整理：重點、已做的決定、待辦事項（有負責人就寫出來）、分享的檔案。只根據提供的訊息，不要編造。${GUARD}`,
     },
     { role: 'user', content: `以下是最近 ${lines.length} 則訊息，由舊到新：\n\n${lines.join('\n')}` },
-  ]);
-  return c.json({ summary, count: lines.length });
+  ], { meta: { count: lines.length } });
 });
 
 aiRoutes.post('/translate', async (c) => {
@@ -100,14 +167,13 @@ aiRoutes.post('/translate', async (c) => {
   }
 
   await useQuota(c, ai, 'ai.translate');
-  const translation = await run(c, ai, [
+  return streamReply(c, ai, [
     {
       role: 'system',
       content: `你是翻譯。把使用者給的文字翻譯成${target}；如果原文已經是${target}，就翻譯成英文。只輸出譯文，不要解釋。網址、程式碼、人名保持原樣。${GUARD}`,
     },
     { role: 'user', content: message.body },
-  ]);
-  return c.json({ translation, target });
+  ], { meta: { target } });
 });
 
 const POLISH_STYLES: Record<string, string> = {
@@ -124,14 +190,13 @@ aiRoutes.post('/polish', async (c) => {
   const style = typeof body.style === 'string' && body.style in POLISH_STYLES ? body.style : 'polish';
 
   await useQuota(c, ai, 'ai.polish');
-  const result = await run(c, ai, [
+  return streamReply(c, ai, [
     {
       role: 'system',
       content: `你是寫作助手。把使用者的訊息草稿${POLISH_STYLES[style]}。使用與原文相同的語言（中文一律用繁體）。只輸出改寫後的訊息本身。${GUARD}`,
     },
     { role: 'user', content: text },
-  ]);
-  return c.json({ text: result.slice(0, MAX_BODY_CHARS), style });
+  ], { meta: { style }, maxChars: MAX_BODY_CHARS });
 });
 
 aiRoutes.post('/chat', async (c) => {
@@ -161,7 +226,7 @@ aiRoutes.post('/chat', async (c) => {
 
   await useQuota(c, ai, 'ai.chat');
   const today = new Date().toISOString().slice(0, 10);
-  const answer = await run(
+  return streamReply(
     c,
     ai,
     [
@@ -173,5 +238,4 @@ aiRoutes.post('/chat', async (c) => {
     ],
     { temperature: 0.6 },
   );
-  return c.json({ answer });
 });
