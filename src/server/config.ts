@@ -21,10 +21,10 @@ export interface S3Config {
 export interface AiConfig {
   /** 例：https://api.groq.com/openai/v1、http://localhost:11434/v1。 */
   baseUrl: string;
-  /** 本機或自架端點可不設。 */
-  apiKey: string | null;
+  apiKey: string;
   model: string;
-  timeoutMs: number;
+  /** 未設定 AI_TIMEOUT_SECONDS 時為 null：不主動逾時，交給平台函式的執行上限。 */
+  timeoutMs: number | null;
   maxTokens: number;
   /** 每位成員每小時可用次數。 */
   hourlyLimit: number;
@@ -41,7 +41,7 @@ export interface Config {
   maxUploadBytes: number;
   autoMigrate: boolean;
   sessionDays: number;
-  /** 未設定 AI_BASE_URL 與 AI_MODEL 時為 null，AI 功能整個關閉。 */
+  /** AI_BASE_URL、AI_API_KEY、AI_MODEL 缺一即為 null，AI 功能整個關閉。 */
   ai: AiConfig | null;
 }
 
@@ -109,12 +109,14 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
 function loadAiConfig(env: Record<string, string | undefined>): AiConfig | null {
   const baseUrl = env.AI_BASE_URL?.trim().replace(/\/+$/, '');
   const model = env.AI_MODEL?.trim();
-  if (!baseUrl || !model || !/^https?:\/\//i.test(baseUrl)) return null;
+  const apiKey = env.AI_API_KEY?.trim();
+  if (!baseUrl || !model || !apiKey || !/^https?:\/\//i.test(baseUrl)) return null;
+  const timeout = Number(env.AI_TIMEOUT_SECONDS);
   return {
     baseUrl,
-    apiKey: env.AI_API_KEY?.trim() || null,
+    apiKey,
     model,
-    timeoutMs: Math.floor(positiveNumber(env.AI_TIMEOUT_SECONDS, 9) * 1000),
+    timeoutMs: env.AI_TIMEOUT_SECONDS?.trim() && Number.isFinite(timeout) && timeout > 0 ? Math.floor(timeout * 1000) : null,
     maxTokens: Math.floor(positiveNumber(env.AI_MAX_TOKENS, 1024)),
     hourlyLimit: Math.floor(positiveNumber(env.AI_HOURLY_LIMIT, 30)),
   };

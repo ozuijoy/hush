@@ -1,7 +1,7 @@
 /**
  * 外接 AI：呼叫 OpenAI 相容的 /chat/completions。
  *
- * 端點、金鑰、模型全部來自環境變數（AI_BASE_URL、AI_API_KEY、AI_MODEL），
+ * 端點、金鑰、模型全部來自環境變數（AI_BASE_URL、AI_API_KEY、AI_MODEL，三個都必填），
  * 程式碼不寫死任何供應商。上游的錯誤內容不回傳給前端，只記在伺服器日誌。
  */
 import type { AiConfig } from './config';
@@ -26,11 +26,14 @@ export async function chatComplete(
   fetchImpl: AiFetch = fetch,
   options: { maxTokens?: number; temperature?: number } = {},
 ): Promise<string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${config.apiKey}`,
+  };
 
+  // 只有設定 AI_TIMEOUT_SECONDS 才主動逾時。
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  const timer = config.timeoutMs === null ? null : setTimeout(() => controller.abort(), config.timeoutMs);
   let response: Response;
   try {
     response = await fetchImpl(completionsUrl(config.baseUrl), {
@@ -52,7 +55,7 @@ export async function chatComplete(
     console.error('[hush] ai request failed', (error as Error).message);
     throw new HttpError(502, 'ai_unreachable', '連不上 AI 服務。');
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 
   if (!response.ok) {

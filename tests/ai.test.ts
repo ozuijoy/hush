@@ -78,13 +78,26 @@ beforeAll(async () => {
 });
 
 describe('AI 設定', () => {
-  it('沒設定端點或模型就關閉，不會預設任何供應商', () => {
+  it('端點、金鑰、模型缺一就關閉，不會預設任何供應商', () => {
     expect(loadConfig(baseEnv).ai).toBeNull();
-    expect(loadConfig({ ...baseEnv, AI_BASE_URL: 'https://ai.example.test/v1' }).ai).toBeNull();
-    expect(loadConfig({ ...baseEnv, AI_MODEL: 'test-model' }).ai).toBeNull();
-    expect(loadConfig({ ...baseEnv, AI_BASE_URL: 'ftp://x', AI_MODEL: 'm' }).ai).toBeNull();
-    const ai = loadConfig({ ...baseEnv, AI_BASE_URL: 'http://localhost:11434/v1', AI_MODEL: 'm' }).ai;
-    expect(ai).toMatchObject({ baseUrl: 'http://localhost:11434/v1', apiKey: null, model: 'm', hourlyLimit: 30 });
+    const { AI_BASE_URL, AI_API_KEY, AI_MODEL } = aiEnv;
+    expect(loadConfig({ ...baseEnv, AI_BASE_URL, AI_MODEL }).ai).toBeNull();
+    expect(loadConfig({ ...baseEnv, AI_BASE_URL, AI_API_KEY }).ai).toBeNull();
+    expect(loadConfig({ ...baseEnv, AI_API_KEY, AI_MODEL }).ai).toBeNull();
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_API_KEY: '   ' }).ai).toBeNull();
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_BASE_URL: 'ftp://x' }).ai).toBeNull();
+    expect(loadConfig({ ...baseEnv, ...aiEnv }).ai).toMatchObject({
+      baseUrl: 'https://ai.example.test/v1',
+      apiKey: 'test-key',
+      model: 'test-model',
+      hourlyLimit: 30,
+    });
+  });
+
+  it('逾時不預設：沒設定 AI_TIMEOUT_SECONDS 就不主動中斷', () => {
+    expect(loadConfig({ ...baseEnv, ...aiEnv }).ai?.timeoutMs).toBeNull();
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_TIMEOUT_SECONDS: 'abc' }).ai?.timeoutMs).toBeNull();
+    expect(loadConfig({ ...baseEnv, ...aiEnv, AI_TIMEOUT_SECONDS: '25' }).ai?.timeoutMs).toBe(25000);
   });
 
   it('端點可以填到 /v1，也可以填完整的 /chat/completions', () => {

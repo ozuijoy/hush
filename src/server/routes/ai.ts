@@ -28,7 +28,7 @@ const GUARD =
 
 function requireAi(c: AppContext): AiConfig {
   const ai = c.get('config').ai;
-  if (!ai) throw new HttpError(503, 'ai_disabled', '管理員尚未設定 AI（AI_BASE_URL、AI_MODEL）。');
+  if (!ai) throw new HttpError(503, 'ai_disabled', '管理員尚未設定 AI（AI_BASE_URL、AI_API_KEY、AI_MODEL）。');
   return ai;
 }
 
