@@ -13,6 +13,8 @@ import type { AppBindings } from './context';
 import { createNeonSql, ensureSchema } from './db';
 import { HttpError } from './http';
 import { adminRoutes } from './routes/admin';
+import { aiRoutes } from './routes/ai';
+import type { AiFetch } from './ai';
 import { authRoutes } from './routes/auth';
 import { fileRoutes } from './routes/files';
 import { memberRoutes } from './routes/members';
@@ -27,6 +29,8 @@ export interface AppDeps {
   config: Config;
   /** 測試用：替換對外連線與 DNS 解析。 */
   outbound?: Outbound;
+  /** 測試用：替換呼叫 AI 端點的 fetch。 */
+  aiFetch?: AiFetch;
 }
 
 function buildApi(deps?: AppDeps) {
@@ -41,6 +45,7 @@ function buildApi(deps?: AppDeps) {
   });
   api.use('*', async (c, next) => {
     c.set('outbound', deps?.outbound ?? defaultOutbound);
+    c.set('aiFetch', deps?.aiFetch ?? ((url, init) => fetch(url, init)));
     if (deps) {
       c.set('config', deps.config);
       c.set('db', deps.sql);
@@ -73,6 +78,7 @@ function buildApi(deps?: AppDeps) {
   api.route('/files', fileRoutes);
   api.route('/members', memberRoutes);
   api.route('/media', mediaRoutes);
+  api.route('/ai', aiRoutes);
   api.route('/admin', adminRoutes);
 
   return api;

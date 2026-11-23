@@ -14,6 +14,7 @@ import {
   cx,
 } from '../components/ui';
 import { useToast } from '../components/Toast';
+import { UploadDialog } from '../components/UploadDialog';
 
 export function FilesView({
   files,
@@ -37,7 +38,9 @@ export function FilesView({
   const input = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
-  const runUpload = async (list: File[]) => {
+  const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
+
+  const runUpload = (list: File[]) => {
     if (!list.length) return;
     const accepted: File[] = [];
     for (const file of list) {
@@ -49,13 +52,17 @@ export function FilesView({
         accepted.push(file);
       }
     }
-    if (!accepted.length) return;
+    if (input.current) input.current.value = '';
+    if (accepted.length) setPendingFiles(accepted);
+  };
 
+  const startUpload = async (accepted: File[], descriptions: string[]) => {
+    setPendingFiles(null);
     setUploading((current) => [...current, ...accepted.map((file) => file.name)]);
     let done = 0;
-    for (const file of accepted) {
+    for (const [index, file] of accepted.entries()) {
       try {
-        await uploadFile(file);
+        await uploadFile(file, descriptions[index]);
         done += 1;
       } catch (caught) {
         toast(caught instanceof Error ? caught.message : '上傳失敗。', 'error');
@@ -68,13 +75,12 @@ export function FilesView({
     }
     await onRefresh();
     if (done) toast(`已上傳 ${done} 個檔案。`, 'success');
-    if (input.current) input.current.value = '';
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
-    void runUpload(Array.from(event.dataTransfer.files));
+    runUpload(Array.from(event.dataTransfer.files));
   };
 
   const [previewing, setPreviewing] = useState<PreviewableFile | null>(null);
@@ -153,7 +159,7 @@ export function FilesView({
               type="file"
               multiple
               hidden
-              onChange={(event) => void runUpload(Array.from(event.target.files ?? []))}
+              onChange={(event) => runUpload(Array.from(event.target.files ?? []))}
             />
             <p className="text-[13px] text-white/60">
               把檔案拖到這裏，或<span className="text-[#b3a8ff]"> 選擇檔案</span>
@@ -202,6 +208,11 @@ export function FilesView({
                     ) : (
                       <p className="truncate text-[13.5px] font-medium text-white/85">{file.name}</p>
                     )}
+                    {file.description ? (
+                      <p className="mt-0.5 line-clamp-2 break-words text-[12px] text-white/60" title={file.description}>
+                        {file.description}
+                      </p>
+                    ) : null}
                     <p className="mt-0.5 truncate text-[11px] text-white/35">
                       {formatBytes(file.size)} · {file.uploader?.name ?? '已移除的成員'} ·{' '}
                       {formatRelative(file.createdAt)}
@@ -228,6 +239,12 @@ export function FilesView({
           )}
         </div>
       </div>
+
+      <UploadDialog
+        files={pendingFiles}
+        onCancel={() => setPendingFiles(null)}
+        onConfirm={(descriptions) => pendingFiles && void startUpload(pendingFiles, descriptions)}
+      />
 
       <FilePreview file={previewing} onClose={() => setPreviewing(null)} onDownload={(file) => void download(file)} />
 

@@ -100,6 +100,28 @@ Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專�
 
 訊息裡的網址會變成連結；若網址是圖片、音訊或影片，由後端代抓後直接在聊天室預覽（`/api/media?url=`），成員的瀏覽器只連到 Hush，外部網站只看得到伺服器的 IP。只轉送 4 MB 以內（Netlify 回應上限 6 MB，扣掉 base64 膨脹）、白名單內的媒體類型（SVG、HTML 不轉送），超過就只顯示連結；並擋下 localhost、私有／鏈路本地等內部位址（含 DNS 解析後與每一次轉址）。點開連結本身仍是直接連到對方網站。
 
+上傳檔案時必須填寫描述或備註（每個檔案各一段，最多 1000 字，多個檔案可一鍵套用同一段）；描述會成為聊天室裡那則檔案訊息的內文，也會顯示在檔案庫，並可被搜尋。
+
+## AI 功能（選用）
+
+接任何 OpenAI 相容的 `/chat/completions` 端點，程式碼不寫死供應商；沒設定 `AI_BASE_URL` 與 `AI_MODEL` 就整個關閉、介面上也不會出現按鈕。
+
+- **聊天摘要**：整理最近 50／100／200 則訊息的重點、決定、待辦與分享的檔案。
+- **翻譯訊息**：每則訊息旁的翻譯鈕，翻成繁體中文（已是中文就翻成英文），再按一次收起。
+- **AI 潤稿**：輸入框旁的魔杖鈕，修正錯字與語病後換掉草稿，可一鍵復原。
+- **AI 助手**：個人問答，只有自己看得到；對話只存在瀏覽器分頁記憶體，伺服器不保存。覺得有用可一鍵分享到聊天室（以自己的名義送出）。
+
+注意：用到的訊息內容會送到你設定的 AI 服務。每次呼叫都寫入稽核紀錄（只記功能與模型，不記內容），並以此限制每人每小時次數。上游的錯誤內容只寫伺服器日誌，不回給前端。
+
+```bash
+AI_BASE_URL=https://api.example.com/v1   # 填到 /v1，或直接填完整的 .../chat/completions
+AI_API_KEY=...                           # 本機或自架端點可不設
+AI_MODEL=your-model-name
+# AI_TIMEOUT_SECONDS=9    # 函式有執行時間上限，預設 9 秒逾時
+# AI_MAX_TOKENS=1024
+# AI_HOURLY_LIMIT=30      # 每人每小時次數
+```
+
 ## 環境變數
 
 | 變數 | 必填 | 說明 |
@@ -115,6 +137,9 @@ Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專�
 | `SESSION_DAYS` | | 登入有效天數（預設 30） |
 | `AUTO_MIGRATE` | | `false` 關閉自動遷移 |
 | `APP_NAME` | | 品牌名稱（預設 Hush） |
+| `AI_BASE_URL` / `AI_MODEL` | AI 功能必填 | 任何 OpenAI 相容端點與模型名稱；兩個都有才啟用 |
+| `AI_API_KEY` | | AI 端點金鑰（以 `Authorization: Bearer` 送出） |
+| `AI_TIMEOUT_SECONDS` / `AI_MAX_TOKENS` / `AI_HOURLY_LIMIT` | | 逾時（預設 9）、回覆長度上限（預設 1024）、每人每小時次數（預設 30） |
 
 ## 安全設計
 
@@ -130,7 +155,7 @@ Backblaze B2 使用 `PutBucketCORS`（S3 API）設定；Supabase Storage 在專�
 ## 權限模型
 
 - **管理員（唯一）**：由 `ADMIN_*` 環境變數首次建立。可移除任何訊息（保留「已移除」墓碑）、置頂一則訊息（新的取代舊的）、移除檔案、新增/停用/移除成員、重設成員密碼、看稽核紀錄。
-- **成員**：由管理員建立帳號；可聊天、搜尋訊息與檔名、上傳檔案、下載檔案、改自己的密碼。不能刪訊息、不能刪檔案、不能管理成員。
+- **成員**：由管理員建立帳號；可聊天、搜尋訊息與檔名、使用 AI 功能（有設定時）、上傳檔案（須附描述）、下載檔案、改自己的密碼。不能刪訊息、不能刪檔案、不能管理成員。
 - 沒有註冊頁、沒有邀請連結、沒有第三方登入。
 
 所有管理動作都會寫入 `audit_log`，管理頁可檢視。
@@ -145,8 +170,11 @@ npm run check   # typecheck + 全部測試 + production build
 - `tests/password.test.ts`：PBKDF2 雜湊/驗證/錯誤格式。
 - `tests/config.test.ts`：環境變數解析（儲存模式、上傳上限、SESSION_DAYS 預設值）。
 - `tests/preview.test.ts`：可預覽類型判斷（圖片、音訊、影片、PDF、文字；SVG/HTML 只以純文字顯示），以及 S3 預覽網址（inline、覆寫 Content-Type、效期 1 小時）。
-- `tests/api.test.ts`：以 PGlite 跑 25 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、置頂（權限、取代、輪詢同步、刪除時取消）、搜尋（中英文、檔名、篩選、萬用字元跳脫）與前後文、訊息刪除墓碑、檔案上傳下載與大小檢查、檔案預覽（inline 白名單、HTML 不以 text/html 回傳）、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
+- `tests/api.test.ts`：以 PGlite 跑 26 項端到端情境——登入建立管理員、成員權限、訊息分頁與參數驗證、置頂（權限、取代、輪詢同步、刪除時取消）、搜尋（中英文、檔名、篩選、萬用字元跳脫）與前後文、訊息刪除墓碑、檔案上傳下載與大小檢查、上傳必須附描述（空白、過長都拒絕，描述進檔案庫與訊息內文）、檔案預覽（inline 白名單、HTML 不以 text/html 回傳）、CSRF、登入鎖定（帳號＋IP、整個 IP、偽造 x-forwarded-for）、停用成員、修改密碼、登出。
 - `tests/media.test.ts`：外鏈媒體代理（含 4 MB 上限檢查）——內部位址判斷（IPv4／IPv6／內嵌 IPv4）、網址格式、內文網址切割，以及端到端：未登入 401、圖片轉送與快取標頭、info 回報大小（超過 4 MB 不可預覽、HEAD 不支援時改用 GET）、413／415、DNS 指向私有位址與轉址到內部都擋下、公開轉址會跟隨。
+- `tests/ai.test.ts`：AI 功能 11 項（假的 OpenAI 相容端點）——未設定端點或模型就關閉（503、aiEnabled=false）、端點網址組合、未登入 401、問答送出的網址／金鑰／模型與去除思考過程、拒絕 system 角色與格式錯誤、摘要、翻譯（指定語言；無效或不存在的訊息編號被拒）、潤稿、上游錯誤不外洩內容（500／429／空回覆／逾時）、每人每小時次數上限與稽核不記內容。
+
+共 59 項。
 
 ## 結構
 
@@ -164,8 +192,10 @@ hush/
 │   ├── sigv4.ts                 # AWS SigV4 預簽名（Web Crypto）
 │   ├── bootstrap.ts             # 首次建立管理員
 │   ├── audit.ts                 # 稽核紀錄
+│   ├── ai.ts                    # OpenAI 相容 /chat/completions 呼叫
+│   ├── outbound.ts              # 外鏈媒體代抓（SSRF 防護）
 │   ├── storage/                 # s3（預簽名）／pg（直存）兩種驅動
-│   └── routes/                  # auth / messages / files / members / admin
+│   └── routes/                  # auth / messages / files / members / media / ai / admin
 ├── web/                         # React SPA（Vite + Tailwind v4）
 ├── tests/                       # vitest：SigV4、密碼、端到端 API
 ├── scripts/                     # dev-server（PGlite）、migrate、hash-password

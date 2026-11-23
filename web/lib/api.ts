@@ -68,6 +68,12 @@ export interface FileTarget {
   preview: 'image' | 'audio' | 'video' | 'pdf' | 'text' | null;
 }
 
+export type AiPolishStyle = 'polish' | 'concise' | 'formal' | 'friendly';
+export interface AiChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export const api = {
   me: () => request<SessionPayload>('/api/auth/me'),
   login: (username: string, password: string) =>
@@ -108,10 +114,10 @@ export const api = {
     request<{ files: FileItem[]; totalBytes: number; storageDriver: 's3' | 'pg'; maxUploadBytes: number }>(
       '/api/files',
     ),
-  presign: (name: string, size: number, mime: string) =>
+  presign: (name: string, size: number, mime: string, description: string) =>
     request<PresignResponse>('/api/files/presign', {
       method: 'POST',
-      body: body({ name, size, mime }),
+      body: body({ name, size, mime, description }),
     }),
   completeFile: (fileId: string, caption = '') =>
     request<{ file: FileItem; message: Message }>(`/api/files/${fileId}/complete`, {
@@ -134,13 +140,30 @@ export const api = {
   removeMember: (id: string) =>
     request<{ ok: true; id: string }>(`/api/members/${id}`, { method: 'DELETE' }),
 
+  aiSummarize: (limit = 100) =>
+    request<{ summary: string; count: number }>('/api/ai/summarize', { method: 'POST', body: body({ limit }) }),
+  aiTranslate: (messageId: string, target?: string) =>
+    request<{ translation: string; target: string }>('/api/ai/translate', {
+      method: 'POST',
+      body: body({ messageId, target }),
+    }),
+  aiPolish: (text: string, style: AiPolishStyle = 'polish') =>
+    request<{ text: string; style: AiPolishStyle }>('/api/ai/polish', { method: 'POST', body: body({ text, style }) }),
+  aiChat: (messages: AiChatMessage[]) =>
+    request<{ answer: string }>('/api/ai/chat', { method: 'POST', body: body({ messages }) }),
+
   overview: () => request<Overview>('/api/admin/overview'),
   audit: () => request<{ entries: AuditEntry[] }>('/api/admin/audit'),
 };
 
-/** 兩段式上傳：先取得預簽名網址，再把檔案直接送到物件儲存。 */
-export async function uploadFile(file: File): Promise<{ file: FileItem; message: Message }> {
-  const presigned = await api.presign(file.name, file.size, file.type || 'application/octet-stream');
+/** 兩段式上傳：先取得預簽名網址，再把檔案直接送到物件儲存。描述必填。 */
+export async function uploadFile(file: File, description: string): Promise<{ file: FileItem; message: Message }> {
+  const presigned = await api.presign(
+    file.name,
+    file.size,
+    file.type || 'application/octet-stream',
+    description,
+  );
 
   const response = await fetch(presigned.upload.url, {
     method: 'PUT',

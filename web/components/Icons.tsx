@@ -252,3 +252,15 @@ export const MoreIcon = (props: IconProps) => (
     <circle cx="18.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
   </Svg>
 );
+export const LanguagesIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.8 3.6-3.2 6.4-7 8" />
+    <path d="M13 21l4-9 4 9M14.5 18h5" />
+  </Svg>
+);
+
+export const WandIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M4 20 15 9M14 4v2M19 9h2M17.5 5.5 19 4M12 7l5 5" />
+  </Svg>
+);

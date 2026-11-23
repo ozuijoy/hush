@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { downloadFile, uploadFile } from '../lib/api';
+import { api, downloadFile, uploadFile } from '../lib/api';
 import { fileKind, formatBytes, formatDay, formatTime, isSameDay } from '../lib/format';
 import type { Message, User } from '../lib/types';
 import { useChat } from '../lib/useChat';
@@ -7,6 +7,10 @@ import {
   AlertIcon,
   DownloadIcon,
   LockIcon,
+  FileTextIcon,
+  LanguagesIcon,
+  SparklesIcon,
+  WandIcon,
   PaperclipIcon,
   PinIcon,
   SearchIcon,
@@ -20,14 +24,18 @@ import { previewInfo } from '../../src/shared/preview';
 import { LinkMediaList, MessageText } from '../components/LinkPreview';
 import { Avatar, Badge, Button, EmptyState, FileGlyph, Modal, Spinner, cx, IconButton } from '../components/ui';
 import { useToast } from '../components/Toast';
+import { UploadDialog } from '../components/UploadDialog';
+import { AiAssistant, AiSummary } from '../components/AiTools';
 
 export function ChatView({
   user,
   members,
+  aiEnabled,
   onUploaded,
 }: {
   user: User;
   members: User[];
+  aiEnabled: boolean;
   onUploaded: () => void;
 }) {
   const memberCount = members.length;
@@ -43,6 +51,12 @@ export function ChatView({
   const [confirm, setConfirm] = useState<Message | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [previewing, setPreviewing] = useState<PreviewableFile | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [translations, setTranslations] = useState<Record<string, { loading: boolean; text?: string }>>({});
+  const [polishing, setPolishing] = useState(false);
+  const [beforePolish, setBeforePolish] = useState<string | null>(null);
   const toast = useToast();
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -86,14 +100,18 @@ export function ChatView({
     }
   };
 
-  const pickFiles = async (files: FileList | null) => {
-    if (!files?.length) return;
-    const list = Array.from(files);
+  const pickFiles = (files: FileList | null) => {
+    if (files?.length) setPendingFiles(Array.from(files));
+    if (fileInput.current) fileInput.current.value = '';
+  };
+
+  const runUploads = async (list: File[], descriptions: string[]) => {
+    setPendingFiles(null);
     setUploading((count) => count + list.length);
     let done = 0;
-    for (const file of list) {
+    for (const [index, file] of list.entries()) {
       try {
-        await uploadFile(file);
+        await uploadFile(file, descriptions[index]);
         done += 1;
       } catch (caught) {
         toast(caught instanceof Error ? caught.message : '檔案上傳失敗。', 'error');
@@ -106,7 +124,44 @@ export function ChatView({
       await refresh();
       onUploaded();
     }
-    if (fileInput.current) fileInput.current.value = '';
+  };
+
+  const translate = async (message: Message) => {
+    const current = translations[message.id];
+    if (current?.text) {
+      // 再按一次收起譯文。
+      setTranslations(({ [message.id]: _removed, ...rest }) => rest);
+      return;
+    }
+    if (current?.loading) return;
+    setTranslations((all) => ({ ...all, [message.id]: { loading: true } }));
+    try {
+      const { translation } = await api.aiTranslate(message.id);
+      setTranslations((all) => ({ ...all, [message.id]: { loading: false, text: translation } }));
+    } catch (caught) {
+      setTranslations(({ [message.id]: _removed, ...rest }) => rest);
+      toast(caught instanceof Error ? caught.message : '翻譯失敗。', 'error');
+    }
+  };
+
+  const polish = async () => {
+    const text = draft.trim();
+    if (!text || polishing) return;
+    setPolishing(true);
+    try {
+      const result = await api.aiPolish(text);
+      setBeforePolish(draft);
+      setDraft(result.text);
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : '潤稿失敗。', 'error');
+    } finally {
+      setPolishing(false);
+    }
+  };
+
+  const shareToChat = async (text: string) => {
+    stick.current = true;
+    await send(text, { id: user.id, name: user.displayName, color: user.color });
   };
 
   const download = async (file: PreviewableFile) => {
@@ -205,6 +260,16 @@ export function ChatView({
           >
             <SearchIcon size={17} />
           </IconButton>
+          {aiEnabled ? (
+            <>
+              <IconButton label="AI 聊天摘要" onClick={() => setSummaryOpen(true)}>
+                <FileTextIcon size={17} />
+              </IconButton>
+              <IconButton label="AI 助手" onClick={() => setAssistantOpen(true)}>
+                <SparklesIcon size={17} />
+              </IconButton>
+            </>
+          ) : null}
           <Badge tone="success">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
             自動更新
@@ -394,6 +459,25 @@ export function ChatView({
                           </div>
                         )}
 
+                        {aiEnabled && message.kind !== 'deleted' && !message.pending && message.body?.trim() ? (
+                          <button
+                            type="button"
+                            onClick={() => void translate(message)}
+                            className={cx(
+                              'transition group-hover:opacity-100 focus-visible:opacity-100',
+                              translations[message.id] ? 'opacity-100' : 'opacity-0',
+                            )}
+                            aria-label={translations[message.id]?.text ? '收起翻譯' : 'AI 翻譯'}
+                            title={translations[message.id]?.text ? '收起翻譯' : 'AI 翻譯'}
+                          >
+                            {translations[message.id]?.loading ? (
+                              <Spinner size={13} />
+                            ) : (
+                              <LanguagesIcon size={14} className="text-white/30 hover:text-[#a99bff]" />
+                            )}
+                          </button>
+                        ) : null}
+
                         {user.role === 'admin' && message.kind !== 'deleted' && !message.pending ? (
                           <button
                             type="button"
@@ -429,6 +513,13 @@ export function ChatView({
                         ) : null}
                       </div>
 
+                      {translations[message.id]?.text ? (
+                        <div className="mt-1 max-w-full whitespace-pre-wrap break-words rounded-xl border border-[#7c6cff]/20 bg-[#7c6cff]/[0.07] px-3 py-1.5 text-[13px] leading-relaxed text-white/80">
+                          <span className="mr-1.5 text-[10.5px] text-[#a99bff]">AI 翻譯</span>
+                          {translations[message.id].text}
+                        </div>
+                      ) : null}
+
                       {message.pending ? (
                         <span className="mt-1 px-1 text-[10.5px] text-white/25">傳送中…</span>
                       ) : null}
@@ -448,7 +539,10 @@ export function ChatView({
             <textarea
               ref={textarea}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setBeforePolish(null);
+              }}
               onKeyDown={onKeyDown}
               rows={1}
               placeholder="輸入訊息…"
@@ -461,7 +555,7 @@ export function ChatView({
                   type="file"
                   multiple
                   hidden
-                  onChange={(event) => void pickFiles(event.target.files)}
+                  onChange={(event) => pickFiles(event.target.files)}
                 />
                 <IconButton
                   label="附加檔案"
@@ -470,6 +564,23 @@ export function ChatView({
                 >
                   {uploading > 0 ? <Spinner size={15} /> : <PaperclipIcon size={17} />}
                 </IconButton>
+                {aiEnabled ? (
+                  <IconButton label="AI 潤稿" onClick={() => void polish()} disabled={!draft.trim() || polishing}>
+                    {polishing ? <Spinner size={15} /> : <WandIcon size={17} />}
+                  </IconButton>
+                ) : null}
+                {beforePolish !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraft(beforePolish);
+                      setBeforePolish(null);
+                    }}
+                    className="text-[11px] text-[#a99bff] hover:underline"
+                  >
+                    復原潤稿
+                  </button>
+                ) : null}
                 <span className="text-[11px] text-white/25">
                   {uploading > 0 ? `上傳中（${uploading}）` : '可直接拖曳檔案'}
                 </span>
@@ -504,6 +615,18 @@ export function ChatView({
         }}
         onSelect={scrollToMessage}
       />
+
+      <UploadDialog
+        files={pendingFiles}
+        onCancel={() => setPendingFiles(null)}
+        onConfirm={(descriptions) => pendingFiles && void runUploads(pendingFiles, descriptions)}
+      />
+      {aiEnabled ? (
+        <>
+          <AiSummary open={summaryOpen} onClose={() => setSummaryOpen(false)} />
+          <AiAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} onShare={shareToChat} />
+        </>
+      ) : null}
 
       <FilePreview file={previewing} onClose={() => setPreviewing(null)} onDownload={(file) => void download(file)} />
 

@@ -5,7 +5,7 @@
  * 遷移腳本與自動遷移都共用這份唯一真源。
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_STATEMENTS: string[] = [
   `create table if not exists schema_migrations (
@@ -106,6 +106,9 @@ export const SCHEMA_STATEMENTS: string[] = [
      pinned_at timestamptz not null default now(),
      constraint chat_pin_single check (id = 1)
    )`,
+
+  // v3：檔案描述（上傳時必填；舊檔案為 null）。
+  `alter table files add column if not exists description text`,
 ];
 
 /**

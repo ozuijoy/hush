@@ -19,6 +19,10 @@ const ACTIONS: Record<string, { label: string; tone: 'brand' | 'success' | 'warn
   'member.create': { label: '新增成員', tone: 'brand' },
   'member.update': { label: '更新成員', tone: 'neutral' },
   'member.delete': { label: '移除成員', tone: 'warn' },
+  'ai.chat': { label: 'AI 問答', tone: 'neutral' },
+  'ai.summarize': { label: 'AI 摘要', tone: 'neutral' },
+  'ai.translate': { label: 'AI 翻譯', tone: 'neutral' },
+  'ai.polish': { label: 'AI 潤稿', tone: 'neutral' },
 };
 
 function detailLabel(entry: AuditEntry): string | null {

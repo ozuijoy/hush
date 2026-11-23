@@ -17,6 +17,19 @@ export interface S3Config {
   prefix: string;
 }
 
+/** 外接 AI：任何 OpenAI 相容端點（/chat/completions），不綁定供應商。 */
+export interface AiConfig {
+  /** 例：https://api.groq.com/openai/v1、http://localhost:11434/v1。 */
+  baseUrl: string;
+  /** 本機或自架端點可不設。 */
+  apiKey: string | null;
+  model: string;
+  timeoutMs: number;
+  maxTokens: number;
+  /** 每位成員每小時可用次數。 */
+  hourlyLimit: number;
+}
+
 export interface Config {
   appName: string;
   databaseUrl: string | null;
@@ -28,6 +41,8 @@ export interface Config {
   maxUploadBytes: number;
   autoMigrate: boolean;
   sessionDays: number;
+  /** 未設定 AI_BASE_URL 與 AI_MODEL 時為 null，AI 功能整個關閉。 */
+  ai: AiConfig | null;
 }
 
 export const SESSION_COOKIE = 'hush_session';
@@ -87,6 +102,21 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     maxUploadBytes,
     autoMigrate: env.AUTO_MIGRATE !== '0' && env.AUTO_MIGRATE !== 'false',
     sessionDays: positiveNumber(env.SESSION_DAYS, 30),
+    ai: loadAiConfig(env),
+  };
+}
+
+function loadAiConfig(env: Record<string, string | undefined>): AiConfig | null {
+  const baseUrl = env.AI_BASE_URL?.trim().replace(/\/+$/, '');
+  const model = env.AI_MODEL?.trim();
+  if (!baseUrl || !model || !/^https?:\/\//i.test(baseUrl)) return null;
+  return {
+    baseUrl,
+    apiKey: env.AI_API_KEY?.trim() || null,
+    model,
+    timeoutMs: Math.floor(positiveNumber(env.AI_TIMEOUT_SECONDS, 9) * 1000),
+    maxTokens: Math.floor(positiveNumber(env.AI_MAX_TOKENS, 1024)),
+    hourlyLimit: Math.floor(positiveNumber(env.AI_HOURLY_LIMIT, 30)),
   };
 }
 
@@ -97,5 +127,6 @@ export function publicConfig(config: Config) {
     storageDriver: config.storageDriver,
     maxUploadBytes: config.maxUploadBytes,
     sessionDays: config.sessionDays,
+    aiEnabled: Boolean(config.ai),
   };
 }

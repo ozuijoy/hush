@@ -3,6 +3,7 @@
  */
 import type { Context } from 'hono';
 import type { Config } from './config';
+import type { AiFetch } from './ai';
 import type { Outbound } from './outbound';
 import type { SessionUser, Sql } from './types';
 
@@ -13,6 +14,7 @@ export type AppBindings = {
     config: Config;
     user: SessionUser;
     outbound: Outbound;
+    aiFetch: AiFetch;
   };
 };
 

@@ -27,6 +27,7 @@ interface FileRow {
   storageDriver: string;
   storageKey: string;
   status: string;
+  description: string | null;
   uploaderId: string | null;
   uploaderName: string | null;
   uploaderColor: string | null;
@@ -35,7 +36,7 @@ interface FileRow {
 
 const FILE_SELECT = `
   select f.id, f.name, f.mime, f.size_bytes::text as "sizeBytes",
-         f.storage_driver as "storageDriver", f.storage_key as "storageKey", f.status,
+         f.storage_driver as "storageDriver", f.storage_key as "storageKey", f.status, f.description,
          ${ISO_TIME('f.created_at')} as "createdAt",
          u.id as "uploaderId", u.display_name as "uploaderName", u.color as "uploaderColor"
   from files f
@@ -48,11 +49,24 @@ function toFile(row: FileRow) {
     name: row.name,
     mime: row.mime,
     size: Number(row.sizeBytes),
+    description: row.description,
     createdAt: row.createdAt,
     uploader: row.uploaderId
       ? { id: row.uploaderId, name: row.uploaderName ?? '未知成員', color: row.uploaderColor ?? '#6d5df6' }
       : null,
   };
+}
+
+export const DESCRIPTION_MAX = 1000;
+
+/** 上傳的檔案必須附描述或備註。 */
+function requireDescription(value: unknown): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) throw new HttpError(400, 'description_required', '上傳檔案必須填寫描述或備註。');
+  if (text.length > DESCRIPTION_MAX) {
+    throw new HttpError(400, 'invalid_field', `描述不可超過 ${DESCRIPTION_MAX} 個字元。`);
+  }
+  return text;
 }
 
 async function loadFile(c: AppContext, id: string) {
@@ -90,6 +104,7 @@ fileRoutes.post('/presign', async (c) => {
     typeof body.mime === 'string' && body.mime.trim()
       ? body.mime.trim().slice(0, 200)
       : 'application/octet-stream';
+  const description = requireDescription(body.description);
 
   const config = c.get('config');
   if (!Number.isInteger(size) || size <= 0) {
@@ -109,9 +124,9 @@ fileRoutes.post('/presign', async (c) => {
   const user = c.get('user');
 
   await c.get('db').query(
-    `insert into files (id, name, mime, size_bytes, storage_driver, storage_key, status, uploader_id)
-     values ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
-    [id, name, mime, size, storage.driver, storageKey, user.id],
+    `insert into files (id, name, mime, size_bytes, storage_driver, storage_key, status, uploader_id, description)
+     values ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)`,
+    [id, name, mime, size, storage.driver, storageKey, user.id, description],
   );
 
   const target = await storage.uploadTarget({ id, name, mime, sizeBytes: size, storageKey });
@@ -149,10 +164,6 @@ fileRoutes.put('/:id/content', async (c) => {
 
 fileRoutes.post('/:id/complete', async (c) => {
   const body = await readJson(c);
-  const caption =
-    typeof body.caption === 'string' && body.caption.trim()
-      ? body.caption.trim().slice(0, 1000)
-      : null;
 
   const user = c.get('user');
   const db = c.get('db');
@@ -162,8 +173,16 @@ fileRoutes.post('/:id/complete', async (c) => {
   if (file.uploaderId !== user.id && user.role !== 'admin') {
     throw new HttpError(403, 'forbidden', '只能完成自己上傳的檔案。');
   }
+  // 完成時可以改寫描述；沒給就沿用申請上傳時填的。
+  const caption =
+    typeof body.caption === 'string' && body.caption.trim()
+      ? requireDescription(body.caption)
+      : requireDescription(file.description);
 
-  await db.query(`update files set status = 'ready' where id = $1`, [file.id]);
+  await db.query(`update files set status = 'ready', description = $2 where id = $1`, [
+    file.id,
+    caption,
+  ]);
   const inserted = await db.query<{ id: string }>(
     `insert into messages (author_id, kind, body, file_id) values ($1, 'file', $2, $3) returning id::text as id`,
     [user.id, caption, file.id],
@@ -175,7 +194,7 @@ fileRoutes.post('/:id/complete', async (c) => {
 
   return c.json(
     {
-      file: toFile({ ...file, status: 'ready' }),
+      file: toFile({ ...file, status: 'ready', description: caption }),
       message: await fetchMessageById(db, inserted[0].id),
     },
     201,

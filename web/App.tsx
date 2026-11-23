@@ -182,7 +182,12 @@ function Workspace({
 
         <div className="min-h-0 flex-1">
           {view === 'chat' ? (
-            <ChatView user={user} members={members} onUploaded={() => void refreshFiles()} />
+            <ChatView
+              user={user}
+              members={members}
+              aiEnabled={session.config.aiEnabled}
+              onUploaded={() => void refreshFiles()}
+            />
           ) : null}
           {view === 'files' ? (
             <FilesView

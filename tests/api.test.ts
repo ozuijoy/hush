@@ -305,7 +305,7 @@ describe('Hush API', () => {
     const presign = await call('/api/files/presign', {
       method: 'POST',
       cookie: aliceCookie,
-      body: { name: '會議紀錄.txt', size: fileBytes.byteLength, mime: 'text/plain' },
+      body: { name: '會議紀錄.txt', size: fileBytes.byteLength, mime: 'text/plain', description: '週一會議' },
     });
     expect(presign.status).toBe(201);
     const presigned = await presign.json();
@@ -351,13 +351,59 @@ describe('Hush API', () => {
     expect(Array.from(received)).toEqual(Array.from(fileBytes));
   });
 
+  it('上傳檔案必須附描述或備註；描述會出現在檔案庫與聊天訊息', async () => {
+    for (const description of [undefined, '', '   ']) {
+      const res = await call('/api/files/presign', {
+        method: 'POST',
+        cookie: aliceCookie,
+        body: { name: 'x.txt', size: 3, mime: 'text/plain', description },
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('description_required');
+    }
+    const tooLong = await call('/api/files/presign', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: { name: 'x.txt', size: 3, mime: 'text/plain', description: 'a'.repeat(1001) },
+    });
+    expect(tooLong.status).toBe(400);
+
+    // 完成時給的 caption 會取代申請時的描述，並成為聊天訊息內文。
+    const files = await (await call('/api/files', { cookie: aliceCookie })).json();
+    expect(files.files[0].description).toBe('今天的會議紀錄');
+    const recent = await (await call('/api/messages?limit=5', { cookie: aliceCookie })).json();
+    const fileMessage = recent.messages.find((m: { file: { id: string } | null }) => m.file?.id === fileId);
+    expect(fileMessage.body).toBe('今天的會議紀錄');
+
+    // 沒給 caption 就沿用申請時的描述。
+    const bytes = new Uint8Array([1, 2, 3]);
+    const presigned = await (
+      await call('/api/files/presign', {
+        method: 'POST',
+        cookie: aliceCookie,
+        body: { name: 'note.bin', size: 3, description: '  備註：測試用  ' },
+      })
+    ).json();
+    await app.request(presigned.upload.url, {
+      method: 'PUT',
+      headers: { cookie: aliceCookie, 'content-type': 'application/octet-stream' },
+      body: bytes as unknown as BodyInit,
+    });
+    const done = await (
+      await call(`/api/files/${presigned.fileId}/complete`, { method: 'POST', cookie: aliceCookie, body: {} })
+    ).json();
+    expect(done.file.description).toBe('備註：測試用');
+    expect(done.message.body).toBe('備註：測試用');
+    expect((await call(`/api/files/${presigned.fileId}`, { method: 'DELETE', cookie: adminCookie })).status).toBe(200);
+  });
+
   it('檔案預覽：inline 網址只給白名單類型，HTML/SVG 不會在站內被渲染', async () => {
     const upload = async (name: string, mime: string, bytes: Uint8Array) => {
       const presigned = await (
         await call('/api/files/presign', {
           method: 'POST',
           cookie: aliceCookie,
-          body: { name, size: bytes.byteLength, mime },
+          body: { name, size: bytes.byteLength, mime, description: `測試 ${name}` },
         })
       ).json();
       await app.request(presigned.upload.url, {
@@ -414,7 +460,7 @@ describe('Hush API', () => {
     const presign = await call('/api/files/presign', {
       method: 'POST',
       cookie: aliceCookie,
-      body: { name: 'a.bin', size: 10, mime: 'application/octet-stream' },
+      body: { name: 'a.bin', size: 10, mime: 'application/octet-stream', description: '大小測試' },
     });
     expect(presign.status).toBe(201);
     const { fileId: pendingId } = await presign.json();
@@ -430,7 +476,7 @@ describe('Hush API', () => {
     const tooLarge = await call('/api/files/presign', {
       method: 'POST',
       cookie: aliceCookie,
-      body: { name: 'big.bin', size: config.maxUploadBytes + 1 },
+      body: { name: 'big.bin', size: config.maxUploadBytes + 1, description: '太大' },
     });
     expect(tooLarge.status).toBe(413);
 

@@ -16,6 +16,7 @@ export interface FileItem {
   name: string;
   mime: string;
   size: number;
+  description?: string | null;
   createdAt: string;
   uploader: { id: string; name: string; color: string } | null;
 }
@@ -49,6 +50,7 @@ export interface AppConfig {
   storageDriver: 's3' | 'pg';
   maxUploadBytes: number;
   sessionDays: number;
+  aiEnabled: boolean;
 }
 
 export interface SessionPayload {
