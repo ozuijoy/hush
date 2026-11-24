@@ -107,7 +107,7 @@ export function AiAssistant({
             <div key={index} className={cx('flex flex-col', item.role === 'user' ? 'items-end' : 'items-start')}>
               <div
                 className={cx(
-                  'max-w-[90%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[13.5px] leading-relaxed',
+                  'max-w-[90%] whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-2xl px-3 py-2 text-[13.5px] leading-relaxed',
                   item.role === 'user'
                     ? 'rounded-br-md bg-[#6350f0] text-white'
                     : 'rounded-bl-md border border-white/[0.06] bg-[#141722] text-white/90',

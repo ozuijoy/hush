@@ -439,17 +439,17 @@ export function ChatView({
                         </div>
                       ) : null}
 
-                      <div className={cx('flex items-center gap-1.5', own && 'flex-row-reverse')}>
+                      <div className={cx('flex min-w-0 max-w-full items-center gap-1.5', own && 'flex-row-reverse')}>
                         {message.kind === 'deleted' ? (
                           <div className="rounded-xl border border-dashed border-white/[0.09] px-3 py-1.5 text-[12px] italic text-white/30">
                             此訊息已由管理員移除
                           </div>
                         ) : message.kind === 'file' && message.file ? (
-                          <div className={cx('flex flex-col gap-1.5', own ? 'items-end' : 'items-start')}>
+                          <div className={cx('flex min-w-0 max-w-full flex-col gap-1.5', own ? 'items-end' : 'items-start')}>
                             {message.body ? (
                               <div
                                 className={cx(
-                                  'max-w-full whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-relaxed',
+                                  'max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-relaxed',
                                   own
                                     ? 'rounded-br-md bg-gradient-to-br from-[#7b68ff] to-[#5f4ce8] text-white'
                                     : 'rounded-bl-md border border-white/[0.06] bg-[#141722] text-white/90',
@@ -469,7 +469,7 @@ export function ChatView({
                           <div className={cx('flex min-w-0 max-w-full flex-col gap-1.5', own ? 'items-end' : 'items-start')}>
                             <div
                               className={cx(
-                                'max-w-full whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-relaxed',
+                                'max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-2xl px-3.5 py-2.5 text-[14.5px] leading-relaxed',
                                 own
                                   ? 'rounded-br-md bg-gradient-to-br from-[#7b68ff] to-[#5f4ce8] text-white shadow-[0_10px_30px_-14px_rgba(99,80,240,0.9)]'
                                   : 'rounded-bl-md border border-white/[0.06] bg-[#141722] text-white/90',
@@ -536,7 +536,7 @@ export function ChatView({
                       </div>
 
                       {translations[message.id]?.text ? (
-                        <div className="mt-1 max-w-full whitespace-pre-wrap break-words rounded-xl border border-[#7c6cff]/20 bg-[#7c6cff]/[0.07] px-3 py-1.5 text-[13px] leading-relaxed text-white/80">
+                        <div className="mt-1 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-xl border border-[#7c6cff]/20 bg-[#7c6cff]/[0.07] px-3 py-1.5 text-[13px] leading-relaxed text-white/80">
                           <span className="mr-1.5 text-[10.5px] text-[#a99bff]">AI 翻譯</span>
                           {translations[message.id].text}
                         </div>
